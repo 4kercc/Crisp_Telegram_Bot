@@ -2,6 +2,16 @@ name: Build Linux Binary
 
 on:
   workflow_dispatch:
+  push:
+    branches: [web-console]
+    paths:
+      - '.github/workflows/build-linux.yml'
+      - 'scripts/build_linux.sh'
+      - 'crisp_tgbot.spec'
+      - 'bot.py'
+      - 'core/**'
+      - 'Modules/**'
+      - 'requirements.txt'
 
 permissions:
   contents: write
