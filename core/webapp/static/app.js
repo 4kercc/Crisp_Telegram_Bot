@@ -197,6 +197,11 @@ async function refreshStatus() {
   ];
   $('#msg-stats').innerHTML = stats.map(([cls, val, label]) =>
     `<div class="stat ${cls}"><div class="num">${val ?? 0}</div><div class="label">${label}</div></div>`).join('');
+
+  // 令牌用量
+  if (engine.tokens) {
+    renderTokenUsage(engine.tokens.tokens, engine.tokens.current, engine.tokens.limit);
+  }
 }
 
 async function engineAction(action) {
@@ -246,11 +251,84 @@ function fillConfigForm(cfg) {
   $('#hint-crisp-key').textContent = cfg.crisp.key_set ? '当前 Key 已保存，留空表示不修改' : '';
   $('#cfg-crisp-website').value = cfg.crisp.website || '';
 
+  renderTokenPoolRows(cfg.crisp.tokens || []);
+
   $$('input[name="cfg-msgapi"]').forEach((el) => { el.checked = el.value === cfg.crisp.msgapi; });
   $('#cfg-poll-interval').value = cfg.crisp.poll_interval || 60;
   updatePollIntervalVisibility();
 
   renderAutoreplyRows(cfg.autoreply || {});
+}
+
+function renderTokenPoolRows(tokens) {
+  const wrap = $('#tokenpool-rows');
+  wrap.innerHTML = '';
+  tokens.forEach((t) => addTokenRow(t.id || '', '', !!t.key_set));
+}
+
+function addTokenRow(id = '', key = '', keySet = false) {
+  const wrap = $('#tokenpool-rows');
+  const row = document.createElement('div');
+  row.className = 'token-row';
+  const idInput = document.createElement('input');
+  idInput.placeholder = 'Identifier（UUID）';
+  idInput.value = id;
+  const keyInput = document.createElement('input');
+  keyInput.type = 'password';
+  keyInput.placeholder = keySet ? '已保存（留空保持不变）' : 'Key';
+  keyInput.value = key;
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'ghost';
+  del.textContent = '删除';
+  del.addEventListener('click', () => row.remove());
+  row.append(idInput, keyInput, del);
+  wrap.appendChild(row);
+}
+
+function collectTokenPool() {
+  return $$('#tokenpool-rows .token-row').map((row) => {
+    const inputs = row.querySelectorAll('input');
+    return { id: inputs[0].value.trim(), key: inputs[1].value.trim() };
+  });
+}
+
+function renderTokenUsage(tokens, current, limit) {
+  const wrap = $('#token-usage');
+  if (!tokens || tokens.length === 0) {
+    wrap.textContent = '未配置令牌池（使用上方 Crisp ID/Key 单令牌）';
+    return;
+  }
+  wrap.innerHTML = '';
+  tokens.forEach((t, i) => {
+    const pct = Math.min(100, Math.round((t.used / (limit || 500)) * 100));
+    const row = document.createElement('div');
+    row.className = 'token-usage-row';
+    const head = document.createElement('div');
+    head.className = 'tu-head';
+    const name = document.createElement('span');
+    name.textContent = t.identifier.slice(0, 8) + '…';
+    const badge = document.createElement('span');
+    if (i === current) {
+      badge.className = 'token-badge current';
+      badge.textContent = '使用中';
+    } else if (t.exhausted) {
+      badge.className = 'token-badge exhausted';
+      badge.textContent = '已耗尽';
+    }
+    const used = document.createElement('span');
+    used.className = 'used';
+    used.textContent = `${t.used} / ${limit}（剩余 ${t.remaining}）`;
+    head.append(name, badge, used);
+    const bar = document.createElement('div');
+    bar.className = 'usage-bar';
+    const fill = document.createElement('div');
+    fill.className = 'fill' + (pct >= 96 ? ' full' : (pct >= 70 ? ' warn' : ''));
+    fill.style.width = pct + '%';
+    bar.appendChild(fill);
+    row.append(head, bar);
+    wrap.appendChild(row);
+  });
 }
 
 function updatePollIntervalVisibility() {
@@ -303,6 +381,7 @@ async function saveConfig() {
       website: $('#cfg-crisp-website').value.trim(),
       msgapi: document.querySelector('input[name="cfg-msgapi"]:checked').value,
       poll_interval: parseInt($('#cfg-poll-interval').value, 10) || 60,
+      tokens: collectTokenPool(),
     },
     autoreply,
   };
@@ -523,6 +602,7 @@ function bindEvents() {
   });
 
   $$('input[name="cfg-msgapi"]').forEach((el) => el.addEventListener('change', updatePollIntervalVisibility));
+  $('#btn-add-token').addEventListener('click', () => addTokenRow());
   $('#btn-add-autoreply').addEventListener('click', () => addAutoreplyRow());
   $('#btn-save-config').addEventListener('click', saveConfig);
 

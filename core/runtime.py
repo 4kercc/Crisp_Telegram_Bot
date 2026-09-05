@@ -8,6 +8,7 @@ class Runtime:
         self._lock = threading.RLock()
         self.config_manager = None
         self.engine = None
+        self.token_pool = None
         self.version = '3.0'
         self.console_host = '127.0.0.1'
         self.console_port = 8000
@@ -25,6 +26,9 @@ class Runtime:
     def get_crisp_client(self):
         engine = self.engine
         return engine.crisp_client if engine is not None else None
+
+    def get_token_pool(self):
+        return self.token_pool
 
 
 runtime = Runtime()

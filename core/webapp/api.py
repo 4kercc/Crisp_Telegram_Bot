@@ -108,6 +108,14 @@ def _keep_secret(new_value, old_value):
 @login_required
 def get_config():
     config = runtime.config_manager.load()
+    crisp_cfg = config['crisp']
+    tokens = []
+    for entry in (crisp_cfg.get('tokens') or []):
+        tokens.append({
+            'id': entry.get('id') or '',
+            'key': mask_value(entry.get('key')),
+            'key_set': bool(entry.get('key')),
+        })
     return jsonify(ok=True, config={
         'bot': {
             'token': mask_value(config['bot'].get('token')),
@@ -116,12 +124,13 @@ def get_config():
             'token_set': bool(config['bot'].get('token')),
         },
         'crisp': {
-            'id': config['crisp'].get('id') or '',
-            'key': mask_value(config['crisp'].get('key')),
-            'website': config['crisp'].get('website') or '',
-            'msgapi': config['crisp'].get('msgapi') or 'rtm',
-            'poll_interval': config['crisp'].get('poll_interval') or 60,
-            'key_set': bool(config['crisp'].get('key')),
+            'id': crisp_cfg.get('id') or '',
+            'key': mask_value(crisp_cfg.get('key')),
+            'website': crisp_cfg.get('website') or '',
+            'msgapi': crisp_cfg.get('msgapi') or 'rtm',
+            'poll_interval': crisp_cfg.get('poll_interval') or 60,
+            'key_set': bool(crisp_cfg.get('key')),
+            'tokens': tokens,
         },
         'autoreply': config.get('autoreply') or {},
     })
@@ -164,6 +173,21 @@ def save_config():
                   else current['crisp'].get('msgapi') or 'rtm',
         'poll_interval': crisp_in.get('poll_interval') or current['crisp'].get('poll_interval') or 60,
     }
+
+    # 令牌池：key 留空或为掩码时按条目顺序保持原值
+    tokens_in = crisp_in.get('tokens')
+    old_tokens = current['crisp'].get('tokens') or []
+    tokens = []
+    if isinstance(tokens_in, list):
+        for i, entry in enumerate(tokens_in):
+            if not isinstance(entry, dict):
+                continue
+            tid = str(entry.get('id') or '').strip()
+            tkey = _keep_secret(entry.get('key'),
+                                old_tokens[i].get('key') if i < len(old_tokens) else '')
+            if tid and tkey:
+                tokens.append({'id': tid, 'key': tkey})
+    crisp['tokens'] = tokens
 
     autoreply_in = body.get('autoreply')
     if isinstance(autoreply_in, dict):

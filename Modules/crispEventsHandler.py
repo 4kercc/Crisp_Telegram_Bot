@@ -35,9 +35,22 @@ class CrispRtmBridge:
         self.conversationMetasDict = {}  # {session_id: metas}
         self._stopped = False
         self._new_sio()
+        self._refresh_token()
+
+    def _refresh_token(self):
+        """优先使用令牌池当前令牌（轮换后重连时自动跟上）。"""
+        pool = runtime.get_token_pool()
+        if pool is not None:
+            token = pool.current()
+            self.crisp_id, self.crisp_key = token.identifier, token.key
+        else:
+            self.crisp_id = self.config['crisp']['id']
+            self.crisp_key = self.config['crisp']['key']
 
     def _new_sio(self):
         """每次（重）连接都新建 socketio 客户端并注册事件。"""
+        if hasattr(self, 'config'):
+            self._refresh_token()
         self.sio = socketio.AsyncClient(reconnection_attempts=5)
         self._register_handlers()
 
@@ -56,8 +69,8 @@ class CrispRtmBridge:
         bus.event('system', 'Crisp RTM 已连接')
         await self.sio.emit('authentication', {
             'tier': 'plugin',
-            'username': self.config['crisp']['id'],
-            'password': self.config['crisp']['key'],
+            'username': self.crisp_id,
+            'password': self.crisp_key,
             'events': ['message:send', 'session:set_data'],
         })
 
@@ -104,7 +117,7 @@ class CrispRtmBridge:
     def getCrispConnectEndpoints(self):
         url = 'https://api.crisp.chat/v1/plugin/connect/endpoints'
         authtier = base64.b64encode(
-            (self.config['crisp']['id'] + ':' + self.config['crisp']['key']).encode('utf-8')
+            (self.crisp_id + ':' + self.crisp_key).encode('utf-8')
         ).decode('utf-8')
         headers = {'X-Crisp-Tier': 'plugin', 'Authorization': 'Basic ' + authtier}
         response = requests.request('GET', url, headers=headers, data='')

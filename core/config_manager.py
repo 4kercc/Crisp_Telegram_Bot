@@ -21,7 +21,8 @@ class ConfigError(Exception):
 def default_config():
     return {
         'bot': {'token': '', 'admin_id': [], 'proxy': ''},
-        'crisp': {'id': '', 'key': '', 'website': '', 'msgapi': 'rtm', 'poll_interval': 60},
+        'crisp': {'id': '', 'key': '', 'website': '', 'msgapi': 'rtm', 'poll_interval': 60,
+                  'tokens': []},
         'autoreply': dict(DEFAULT_AUTOREPLY),
         'console': {},
     }
@@ -119,6 +120,16 @@ class ConfigManager:
                 problems.append('REST 轮询间隔不能小于 5 秒')
         except (TypeError, ValueError):
             problems.append('REST 轮询间隔必须是数字')
+
+        tokens = crisp.get('tokens')
+        if tokens:
+            if not isinstance(tokens, list):
+                problems.append('令牌池 tokens 必须是列表')
+            else:
+                for i, entry in enumerate(tokens, 1):
+                    if not isinstance(entry, dict) or not str(entry.get('id') or '').strip() \
+                            or not str(entry.get('key') or '').strip():
+                        problems.append(f'令牌池第 {i} 条缺少 ID 或 Key')
 
         autoreply = data.get('autoreply')
         if autoreply is not None and not isinstance(autoreply, dict):

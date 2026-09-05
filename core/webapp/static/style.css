@@ -215,6 +215,36 @@ button.ghost { background: transparent; }
 .evt-session { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); }
 .evt-email { font-size: 12.5px; color: var(--text); word-break: break-all; }
 
+/* ---------- 令牌池 ---------- */
+.token-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin-bottom: 8px; }
+.token-row input {
+  padding: 8px 10px; background: var(--bg-input); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; font-size: 12.5px;
+  font-family: var(--mono);
+}
+.token-row input:focus { outline: none; border-color: var(--accent); }
+.token-usage-row { margin-bottom: 12px; }
+.token-usage-row .tu-head {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 12.5px; margin-bottom: 5px; font-family: var(--mono);
+}
+.token-usage-row .tu-head .used { color: var(--text-dim); }
+.usage-bar {
+  height: 7px; background: var(--bg-input); border-radius: 999px; overflow: hidden;
+}
+.usage-bar .fill {
+  height: 100%; background: var(--green); border-radius: 999px;
+  transition: width .4s ease;
+}
+.usage-bar .fill.warn { background: var(--amber); }
+.usage-bar .fill.full { background: var(--red); }
+.token-badge {
+  display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 10.5px;
+  font-family: inherit; margin-left: 8px;
+}
+.token-badge.current { background: rgba(79, 140, 255, .18); color: var(--accent); }
+.token-badge.exhausted { background: rgba(240, 86, 94, .18); color: var(--red); }
+
 /* ---------- 其他 ---------- */
 .banner {
   margin-bottom: 16px; padding: 11px 14px; border-radius: 10px; font-size: 13px;

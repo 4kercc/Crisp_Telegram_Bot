@@ -66,6 +66,10 @@
             <h3>消息统计（本次运行）</h3>
             <div id="msg-stats" class="stats-grid"></div>
           </div>
+          <div class="card">
+            <h3>令牌用量（每枚 500 次 / 24h）</h3>
+            <div id="token-usage" class="muted">引擎未运行</div>
+          </div>
         </div>
       </section>
 
@@ -106,6 +110,12 @@
               <span class="field-label">Website ID</span>
               <input type="text" id="cfg-crisp-website" placeholder="Crisp 设置页 URL 中的 UUID">
             </label>
+            <div class="field">
+              <span class="field-label">令牌池（可选：多枚开发令牌自动轮换，规避 500 次/24h 限额）</span>
+              <div id="tokenpool-rows"></div>
+              <button id="btn-add-token" type="button" class="ghost">＋ 添加令牌</button>
+              <span class="field-hint">每枚令牌对应一个 Marketplace 插件的 Identifier + Key；Key 留空表示保持原值</span>
+            </div>
             <div class="field">
               <span class="field-label">消息接收模式</span>
               <div class="radio-row">

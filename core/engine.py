@@ -61,7 +61,21 @@ class BotEngine:
             self.last_error = None
             self._state_event.clear()
 
-        crisp_client = self._build_crisp_client(config)
+        # 组建令牌池（多枚开发令牌轮换，规避 500 次/24h 限额）
+        crisp_cfg = config['crisp']
+        entries = [(str(t.get('id')).strip(), str(t.get('key')).strip())
+                   for t in (crisp_cfg.get('tokens') or [])
+                   if str(t.get('id') or '').strip() and str(t.get('key') or '').strip()]
+        primary = (str(crisp_cfg['id']).strip(), str(crisp_cfg['key']).strip())
+        if primary not in entries:
+            entries.insert(0, primary)
+        from core.token_pool import TokenPool, install_request_hook
+        from core import runtime
+        pool = TokenPool(entries)
+        runtime.token_pool = pool
+        install_request_hook(pool)
+
+        crisp_client = self._build_crisp_client(config, pool)
         with self._lock:
             self.config = config
             self.crisp_client = crisp_client
@@ -101,6 +115,8 @@ class BotEngine:
                     log.error('停止引擎时出错：%s', err)
         finally:
             self._cleanup()
+            from core import runtime
+            runtime.token_pool = None
 
         return self.status()
 
@@ -113,7 +129,8 @@ class BotEngine:
 
     def status(self):
         with self._lock:
-            return {
+            from core import runtime
+            status = {
                 'state': self.state,
                 'mode': self.mode,
                 'last_error': self.last_error,
@@ -122,20 +139,25 @@ class BotEngine:
                 'tg_username': self.tg_username,
                 'crisp_website_name': self.crisp_website_name,
             }
+            if runtime.token_pool is not None:
+                status['tokens'] = runtime.token_pool.snapshot()
+            return status
 
     # ---------- 内部实现 ----------
 
-    def _build_crisp_client(self, config):
+    def _build_crisp_client(self, config, pool):
         from crisp_api import Crisp
         from crisp_api.errors.route import RouteError
 
-        crisp = config['crisp']
+        crisp_cfg = config['crisp']
         try:
             client = Crisp()
             client.set_tier('plugin')
-            client.authenticate(crisp['id'], crisp['key'])
+            current = pool.current()
+            client.authenticate(current.identifier, current.key)
+            pool.bind_client(client)
             client.plugin.get_connect_account()
-            site = client.website.get_website(crisp['website']) or {}
+            site = client.website.get_website(crisp_cfg['website']) or {}
             self.crisp_website_name = site.get('name')
             return client
         except Exception as err:
