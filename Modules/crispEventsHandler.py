@@ -138,7 +138,8 @@ class CrispRtmBridge:
 
     async def sendImageMessage(self, message):
         session_id = message['session_id']
-        text = build_push_text({}, '', image_only=True, timestamp=message.get('timestamp'))
+        metas = self.conversationMetasDict.get(session_id) or {}
+        text = build_push_text(metas, '', image_only=True, timestamp=message.get('timestamp'))
         for admin_id in self.config['bot']['admin_id']:
             sent = await self.context.bot.send_photo(
                 chat_id=admin_id,

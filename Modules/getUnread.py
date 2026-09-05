@@ -90,7 +90,7 @@ async def _push_image(context, client, config, website_id, session_id, message):
     # 通过消息指纹将消息置为已读
     mark_read(client, website_id, session_id, message['fingerprint'])
 
-    text = build_push_text({}, '', image_only=True, timestamp=message.get('timestamp'))
+    text = build_push_text(metas, '', image_only=True, timestamp=message.get('timestamp'))
     for admin_id in config['bot']['admin_id']:
         sent = await context.bot.send_photo(
             chat_id=admin_id,
