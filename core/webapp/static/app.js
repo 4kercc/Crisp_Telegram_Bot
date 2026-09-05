@@ -287,7 +287,7 @@ function addTokenRow(id = '', key = '', keySet = false) {
 }
 
 function collectTokenPool() {
-  return $$('#tokenpool-rows .token-row').map((row) => {
+  return Array.from($$('#tokenpool-rows .token-row')).map((row) => {
     const inputs = row.querySelectorAll('input');
     return { id: inputs[0].value.trim(), key: inputs[1].value.trim() };
   });
