@@ -2,6 +2,7 @@
   - [现有功能](#现有功能)
   - [计划功能](#计划功能)
   - [Linux 二进制（免安装 Python）](#linux-二进制免安装-python)
+    - [一键升级](#一键升级)
   - [Web 控制台（推荐）](#web-控制台推荐)
     - [启动控制台](#启动控制台)
     - [控制台功能](#控制台功能)
@@ -18,6 +19,7 @@
       - [2.3 运行容器](#23-运行容器)
     - [3. 环境变量说明](#3-环境变量说明)
     - [4. tagname说明](#4-tagname说明)
+  - [更新日志](#更新日志)
   - [特别说明](#特别说明)
 
 # Crisp Telegram Bot via Python
@@ -30,8 +32,9 @@ Python 版本需求 >= 3.8
 ## 现有功能
 - 基于Crisp客服系统
 - 自动推送文字、图片到指定聊天
+- 推送卡片附带用户资料：VIP等级、已用/剩余流量、套餐到期、注册时间、余额（取自面板主题推送的 Crisp session:data）与消息真实发送时间
 - 自动基于关键词回复对应内容
-- 支持回复后推送回对应客户
+- 支持回复后推送回对应客户（直接回复推送消息即可，卡片无需展示 Session）
 - 内置 Web 控制台：网页端完成参数配置、连通性测试、实时查看请求记录
 
 ## 计划功能
@@ -42,7 +45,7 @@ Python 版本需求 >= 3.8
 
 ## Linux 二进制（免安装 Python）
 
-在 [Actions](https://github.com/4kercc/Crisp_Telegram_Bot/actions) 页面运行 **Build Linux Binary** 工作流（或向 `web-console` 分支推送改动自动触发），
+在 [Actions](https://github.com/4kercc/Crisp_Telegram_Bot/actions) 页面运行 **Build Linux Binary** 工作流（或向 `master` / `web-console` 分支推送改动自动触发），
 构建完成后在 [Releases](https://github.com/4kercc/Crisp_Telegram_Bot/releases) 下载单文件可执行程序 `crisp_tgbot`：
 
 ```
@@ -59,7 +62,28 @@ chmod +x crisp_tgbot
 自行构建：把项目上传到任意 Linux（Python ≥ 3.8）执行 `bash scripts/build_linux.sh`，产物为 `dist/crisp_tgbot`；
 或直接使用仓库里的 `crisp_tgbot.spec`。
 
-## Web 控制台（推荐）无需手动编辑 config.yml，机器人引擎内置于控制台进程中，可随时在网页上启动/停止/重启。
+### 一键升级
+
+服务器上下载升级脚本并执行（自动下载最新 Release、停旧进程、替换、重启，`config.yml` 保留）：
+
+```
+cd /root/tgbot   # 二进制所在目录
+wget https://github.com/4kercc/Crisp_Telegram_Bot/raw/master/scripts/upgrade.sh
+bash upgrade.sh
+```
+
+手动升级等价于：
+
+```
+wget -O crisp_tgbot https://github.com/4kercc/Crisp_Telegram_Bot/releases/latest/download/crisp_tgbot
+chmod +x crisp_tgbot
+systemctl restart crisp-tgbot
+```
+
+> 注意：替换文件后务必确保旧进程已退出（`ps aux | grep crisp_tgbot` 只能有一个进程），
+> 否则旧进程会继续占着控制台端口，看起来"更新了却没生效"。
+
+## Web 控制台（推荐）
 
 ### 启动控制台
 ```
@@ -192,6 +216,23 @@ systemctl status crisp_telegram_bot
 | 3.9    | alpine 3.17 + python 3.9  | ![Docker Image Size (tag)](https://img.shields.io/docker/image-size/moefaq/crisp_telegram_bot/py3.9)  |
 | 3.10   | alpine 3.17 + python 3.10 | ![Docker Image Size (tag)](https://img.shields.io/docker/image-size/moefaq/crisp_telegram_bot/py3.10) |
 | 3.11   | alpine 3.17 + python 3.11 | ![Docker Image Size (tag)](https://img.shields.io/docker/image-size/moefaq/crisp_telegram_bot/py3.11) |
+
+## 更新日志
+
+### 2026-09-05 v3.0 Web 控制台重构
+
+- **架构重构**：机器人引擎内置于 Web 控制台进程，网页端随时启动/停止/重启；配置完整时自动运行
+- **Web 控制台**：参数配置（密钥脱敏、留空保持原值）、Crisp/Telegram 连通性测试、
+  实时请求记录（运行日志 + 消息转发记录）、消息统计；强制密码访问，失败限速
+- **Linux 单文件二进制**：GitHub Actions 自动构建 → 冒烟测试 → 发布 Release，免安装 Python
+- **推送卡片显示用户资料**：VIP等级、已用/剩余流量、套餐到期、注册时间、账户余额
+  （读取面板主题推送到 Crisp session:data 的字段，SSPanel 与 v2board 键名均兼容），字段缺失自动跳过
+- **推送卡片显示消息真实发送时间**：补推的积压未读消息也能看到客户实际发送的时间
+- **移除卡片 Session 行**：改用推送消息映射，直接回复 Telegram 推送消息即可送达用户
+- **修复 RTM 连接崩溃**：新版 engineio 需要 aiohttp≥3.11 的 `ClientWSTimeout`，
+  依赖已按 Python 版本配对；连接失败/断开后每 30 秒自动重连，不再一崩就静默失联
+- **新增可选代理配置**（Telegram/Crisp 出站共用），网页配置即可
+- 修复回复转发 session_id 未绑定、启动失败直接退出等问题；日志统一接入控制台实时记录
 
 ## 特别说明
 某些v2board自定义主题没有向crisp push data，需要用户自行实现，详见[crisp Chatbox Web SDK](https://docs.crisp.chat/guides/chatbox-sdks/web-sdk/)  
