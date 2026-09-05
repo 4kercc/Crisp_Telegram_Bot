@@ -1,4 +1,5 @@
 """RTM 模式：通过 Crisp WebSocket（socketio）实时接收新消息并推送到 Telegram。"""
+import asyncio
 import base64
 import json
 import logging
@@ -31,6 +32,11 @@ class CrispRtmBridge:
         self.context = context
         self.website_id = config['crisp']['website']
         self.conversationMetasDict = {}  # {session_id: metas}
+        self._stopped = False
+        self._new_sio()
+
+    def _new_sio(self):
+        """每次（重）连接都新建 socketio 客户端并注册事件。"""
         self.sio = socketio.AsyncClient(reconnection_attempts=5)
         self._register_handlers()
 
@@ -45,6 +51,8 @@ class CrispRtmBridge:
         self.sio.on('session:set_data', self._on_session_set_data)
 
     async def _on_connect(self):
+        log.info('Crisp RTM 已连接')
+        bus.event('system', 'Crisp RTM 已连接')
         await self.sio.emit('authentication', {
             'tier': 'plugin',
             'username': self.config['crisp']['id'],
@@ -168,16 +176,34 @@ class CrispRtmBridge:
                     else:
                         log.info('忽略未处理的消息类型：%s（会话 %s）', message['type'], session_id)
 
-    # Connecting to Crisp RTM(WSS) Server
+    # Connecting to Crisp RTM(WSS) Server，断开后自动重连
     async def start(self):
-        await self.sio.connect(
-            self.getCrispConnectEndpoints(),
-            transports='websocket',
-            wait_timeout=10,
-        )
-        await self.sio.wait()
+        while not self._stopped:
+            try:
+                await self.sio.connect(
+                    self.getCrispConnectEndpoints(),
+                    transports='websocket',
+                    wait_timeout=10,
+                )
+                await self.sio.wait()
+                if self._stopped:
+                    break
+                log.warning('与 Crisp RTM 服务器断开，30 秒后重连')
+                bus.event('system', '与 Crisp RTM 服务器断开，30 秒后重连')
+            except asyncio.CancelledError:
+                return
+            except Exception as err:
+                log.error('Crisp RTM 连接失败：%s，30 秒后重试', err)
+                bus.event('error', f'Crisp RTM 连接失败：{err}，30 秒后重试')
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                return
+            if not self._stopped:
+                self._new_sio()
 
     async def stop(self):
+        self._stopped = True
         try:
             await self.sio.disconnect()
         except Exception as err:
