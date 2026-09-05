@@ -7,6 +7,7 @@ import logging
 import requests
 import socketio
 
+from core import session_map
 from core.logbus import bus
 from core.runtime import runtime
 from core.templates import build_push_text, match_autoreply
@@ -114,7 +115,7 @@ class CrispRtmBridge:
         metas = self.conversationMetasDict.get(session_id) or {}
 
         matched, autoreply = match_autoreply(self.config.get('autoreply'), message['content'])
-        text = build_push_text(metas, message['content'], session_id,
+        text = build_push_text(metas, message['content'],
                                autoreply=autoreply if matched else '',
                                timestamp=message.get('timestamp'))
         if matched:
@@ -128,7 +129,8 @@ class CrispRtmBridge:
             log.info('会话 %s 命中自动回复', session_id)
 
         for admin_id in self.config['bot']['admin_id']:
-            await self.context.bot.send_message(chat_id=admin_id, text=text, parse_mode='HTML')
+            sent = await self.context.bot.send_message(chat_id=admin_id, text=text, parse_mode='HTML')
+            session_map.record(admin_id, getattr(sent, 'message_id', None), session_id)
         self.mark_messages_read(message)
         log.info('已推送文本消息到 Telegram（会话 %s）', session_id)
         bus.event('message_in', message['content'], session_id=session_id,
@@ -136,14 +138,15 @@ class CrispRtmBridge:
 
     async def sendImageMessage(self, message):
         session_id = message['session_id']
-        text = build_push_text({}, '', session_id, image_only=True, timestamp=message.get('timestamp'))
+        text = build_push_text({}, '', image_only=True, timestamp=message.get('timestamp'))
         for admin_id in self.config['bot']['admin_id']:
-            await self.context.bot.send_photo(
+            sent = await self.context.bot.send_photo(
                 chat_id=admin_id,
                 photo=message['content']['url'],
                 caption=text,
                 parse_mode='HTML',
             )
+            session_map.record(admin_id, getattr(sent, 'message_id', None), session_id)
         self.mark_messages_read(message)
         log.info('已推送图片消息到 Telegram（会话 %s）', session_id)
         bus.event('message_in', '[图片]', session_id=session_id, msg_type='image', status='ok')

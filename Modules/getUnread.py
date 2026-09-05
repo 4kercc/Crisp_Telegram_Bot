@@ -1,6 +1,7 @@
 """REST 模式：定时轮询 Crisp 未读会话并推送到 Telegram。"""
 import logging
 
+from core import session_map
 from core.logbus import bus
 from core.runtime import runtime
 from core.templates import build_push_text, match_autoreply
@@ -36,11 +37,6 @@ async def exec(context):
     conversations = client.website.search_conversations(website_id, 1, filter_unread='1')
     if len(conversations) == 0:
         return
-    mark_read_query = {
-        'from': 'user',
-        'origin': 'chat',
-        'fingerprints': []
-    }
     for conversation in conversations:
         session_id = conversation['session_id']
         # Crisp api docs: Returns the last batch of messages. 这个last batch到底能有多少我没整明白.
@@ -67,7 +63,7 @@ async def _push_text(context, client, config, website_id, session_id, metas, mes
     mark_read(client, website_id, session_id, message['fingerprint'])
 
     matched, autoreply = match_autoreply(config.get('autoreply'), message['content'])
-    text = build_push_text(metas, message['content'], session_id,
+    text = build_push_text(metas, message['content'],
                            autoreply=autoreply if matched else '',
                            timestamp=message.get('timestamp'))
 
@@ -82,7 +78,8 @@ async def _push_text(context, client, config, website_id, session_id, metas, mes
         log.info('会话 %s 命中自动回复', session_id)
 
     for admin_id in config['bot']['admin_id']:
-        await context.bot.send_message(chat_id=admin_id, text=text, parse_mode='HTML')
+        sent = await context.bot.send_message(chat_id=admin_id, text=text, parse_mode='HTML')
+        session_map.record(admin_id, getattr(sent, 'message_id', None), session_id)
 
     log.info('已推送文本消息到 Telegram（会话 %s）', session_id)
     bus.event('message_in', message['content'], session_id=session_id,
@@ -93,14 +90,15 @@ async def _push_image(context, client, config, website_id, session_id, message):
     # 通过消息指纹将消息置为已读
     mark_read(client, website_id, session_id, message['fingerprint'])
 
-    text = build_push_text({}, '', session_id, image_only=True, timestamp=message.get('timestamp'))
+    text = build_push_text({}, '', image_only=True, timestamp=message.get('timestamp'))
     for admin_id in config['bot']['admin_id']:
-        await context.bot.send_photo(
+        sent = await context.bot.send_photo(
             chat_id=admin_id,
             photo=message['content']['url'],
             caption=text,
             parse_mode='HTML',
         )
+        session_map.record(admin_id, getattr(sent, 'message_id', None), session_id)
 
     log.info('已推送图片消息到 Telegram（会话 %s）', session_id)
     bus.event('message_in', '[图片]', session_id=session_id, msg_type='image', status='ok')

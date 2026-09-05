@@ -8,6 +8,7 @@ import time
 
 from telegram.ext import Application, MessageHandler, filters
 
+from core import session_map
 from core.logbus import bus
 
 log = logging.getLogger('engine')
@@ -257,13 +258,16 @@ class BotEngine:
         replied = message.reply_to_message if message else None
         if replied is None:
             return
-        source_text = replied.text or replied.caption or ''
-        match = SESSION_ID_RE.search(source_text)
-        if match is None:
-            log.warning('回复的目标消息中未找到 Session ID，已忽略')
-            bus.event('error', '回复的目标消息中未找到 Session ID，已忽略')
-            return
-        session_id = match.group()
+        # 优先查推送时记录的 (chat_id, message_id) 映射，兼容旧版卡片里内嵌 Session 文本
+        session_id = session_map.lookup(update.effective_chat.id, replied.message_id)
+        if session_id is None:
+            source_text = replied.text or replied.caption or ''
+            match = SESSION_ID_RE.search(source_text)
+            if match is None:
+                log.warning('无法定位回复目标对应的会话（请回复机器人推送的消息）')
+                bus.event('error', '无法定位回复目标对应的会话（请直接回复机器人推送的消息）')
+                return
+            session_id = match.group()
         config = self.config
         query = {
             'type': 'text',
