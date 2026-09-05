@@ -86,7 +86,7 @@ def main():
 
     from werkzeug.serving import make_server
     server = make_server(host, port, app, threaded=True)
-    log.info('Web 控制台已启动：http://%s:%s', host if host != '0.0.0.0' else '127.0.0.1', port)
+    log.info('Web 控制台已启动：%s:%s', host, port)
     if host in ('0.0.0.0', '::'):
         log.warning('控制台正监听所有网卡（%s），请确保已设置控制台密码或配置防火墙！', host)
     try:
