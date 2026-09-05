@@ -107,7 +107,8 @@ class CrispRtmBridge:
 
         matched, autoreply = match_autoreply(self.config.get('autoreply'), message['content'])
         text = build_push_text(metas, message['content'], session_id,
-                               autoreply=autoreply if matched else '')
+                               autoreply=autoreply if matched else '',
+                               timestamp=message.get('timestamp'))
         if matched:
             self.client.website.send_message_in_conversation(self.website_id, session_id, {
                 'type': 'text',
@@ -127,7 +128,7 @@ class CrispRtmBridge:
 
     async def sendImageMessage(self, message):
         session_id = message['session_id']
-        text = build_push_text({}, '', session_id, image_only=True)
+        text = build_push_text({}, '', session_id, image_only=True, timestamp=message.get('timestamp'))
         for admin_id in self.config['bot']['admin_id']:
             await self.context.bot.send_photo(
                 chat_id=admin_id,

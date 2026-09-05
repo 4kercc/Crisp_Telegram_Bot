@@ -67,7 +67,9 @@ async def _push_text(context, client, config, website_id, session_id, metas, mes
     mark_read(client, website_id, session_id, message['fingerprint'])
 
     matched, autoreply = match_autoreply(config.get('autoreply'), message['content'])
-    text = build_push_text(metas, message['content'], session_id, autoreply=autoreply if matched else '')
+    text = build_push_text(metas, message['content'], session_id,
+                           autoreply=autoreply if matched else '',
+                           timestamp=message.get('timestamp'))
 
     if matched:
         client.website.send_message_in_conversation(website_id, session_id, {
@@ -91,7 +93,7 @@ async def _push_image(context, client, config, website_id, session_id, message):
     # 通过消息指纹将消息置为已读
     mark_read(client, website_id, session_id, message['fingerprint'])
 
-    text = build_push_text({}, '', session_id, image_only=True)
+    text = build_push_text({}, '', session_id, image_only=True, timestamp=message.get('timestamp'))
     for admin_id in config['bot']['admin_id']:
         await context.bot.send_photo(
             chat_id=admin_id,
