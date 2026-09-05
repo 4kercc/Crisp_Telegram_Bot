@@ -1,218 +1,206 @@
-from telegram.ext import ContextTypes
-import bot
-import socketio
-import requests
-import json
+"""RTM 模式：通过 Crisp WebSocket（socketio）实时接收新消息并推送到 Telegram。"""
 import base64
+import json
+import logging
 
-# def someting
-config = bot.config
-client = bot.client
-website_id = config["crisp"]["website"]
+import requests
+import socketio
 
-query = {}
-conversationMetasDict = {}  # {session_id : metas}
+from core.logbus import bus
+from core.runtime import runtime
+from core.templates import build_push_text, match_autoreply
+
+log = logging.getLogger('mod.rtm')
 
 
 class Conf:
-    desc = "推送未读新消息"
-    method = "events"
-    enable = False
-
-if config['crisp']['msgapi'] == 'rtm':
-    Conf.enable = True 
-
-def getKey(content: str):
-    if len(config["autoreply"]) > 0:
-        for x in config["autoreply"]:
-            keyword = x.split("|")
-            for key in keyword:
-                if key in content:
-                    return True, config["autoreply"][x]
-    return False, ""
+    desc = '推送未读新消息'
+    method = 'events'
 
 
-# Store crisp conversation metas
-def storeCrispConversationMetas(session_id):
-    metas = client.website.get_conversation_metas(website_id, session_id)
-    conversationMetasDict[session_id] = metas
+def enabled(config):
+    return config['crisp']['msgapi'] == 'rtm'
 
 
-# Create socketio client instance
-sioEvents = [
-    "message:send",
-    "session:set_data"
-]
+class CrispRtmBridge:
+    """每次引擎启动新建一个实例，持有 socketio 客户端与会话元数据缓存。"""
 
-sioAuthenticateTier = {
-    "tier": "plugin",
-    "username": config["crisp"]["id"],
-    "password": config["crisp"]["key"],
-    "events": sioEvents,
-}
-sio = socketio.AsyncClient(reconnection_attempts=5, logger=True)
+    def __init__(self, config, client, context):
+        self.config = config
+        self.client = client
+        self.context = context
+        self.website_id = config['crisp']['website']
+        self.conversationMetasDict = {}  # {session_id: metas}
+        self.sio = socketio.AsyncClient(reconnection_attempts=5)
+        self._register_handlers()
 
+    # ---------- socketio 事件 ----------
 
-# Meow!
-def getCrispConnectEndpoints():
-    url = "https://api.crisp.chat/v1/plugin/connect/endpoints"
+    def _register_handlers(self):
+        self.sio.on('connect', self._on_connect)
+        self.sio.on('unauthorized', self._on_unauthorized)
+        self.sio.on('connect_error', self._on_connect_error)
+        self.sio.on('disconnect', self._on_disconnect)
+        self.sio.on('message:send', self._on_message_send)
+        self.sio.on('session:set_data', self._on_session_set_data)
 
-    authtier = base64.b64encode(
-        (config["crisp"]["id"] + ":" + config["crisp"]["key"]).encode("utf-8")
-    ).decode("utf-8")
-    payload = ""
-    headers = {"X-Crisp-Tier": "plugin", "Authorization": "Basic " + authtier}
-    response = requests.request("GET", url, headers=headers, data=payload)
-    endPoint = json.loads(response.text).get("data").get("socket").get("app")
-    return endPoint
+    async def _on_connect(self):
+        await self.sio.emit('authentication', {
+            'tier': 'plugin',
+            'username': self.config['crisp']['id'],
+            'password': self.config['crisp']['key'],
+            'events': ['message:send', 'session:set_data'],
+        })
 
+    async def _on_unauthorized(self, data):
+        log.error('Crisp RTM 认证被拒绝：%s', data)
+        bus.event('error', f'Crisp RTM 认证被拒绝：{data}')
 
-def sendTextMessageBuilder(message):
-    session_id = message["session_id"]
-    metas = conversationMetasDict.get(session_id)
-    text = "📠<b>Crisp消息推送</b>\n"
-    if len(metas["email"]) > 0:
-        email = metas["email"]
-        text = f"{text}📧<b>电子邮箱</b>：{email}\n"
-    if len(metas["data"]) > 0:
-        if "Plan" in metas["data"]:
-            Plan = metas["data"]["Plan"]
-            text = f"{text}🪪<b>使用套餐</b>：{Plan}\n"
-        if "UsedTraffic" in metas["data"] and "AllTraffic" in metas["data"]:
-            UsedTraffic = metas["data"]["UsedTraffic"]
-            AllTraffic = metas["data"]["AllTraffic"]
-            text = f"{text}🗒<b>流量信息</b>：{UsedTraffic} / {AllTraffic}\n"
-    content = message["content"]
-    text = f"{text}🧾<b>消息内容</b>：{content}\n"
-    # 自动回复判定
-    result, autoreply = getKey(message["content"])
-    if result is True:
-        text = f"{text}💡<b>自动回复</b>：{autoreply}\n"
-        query = {
-            "type": "text",
-            "content": autoreply,
-            "from": "operator",
-            "origin": "chat",
-        }
-        client.website.send_message_in_conversation(website_id, session_id, query)
-    # Session打个码
-    text = f"{text}\n🧷<b>Session</b>：<tg-spoiler>{session_id}</tg-spoiler>"
-    return text
+    async def _on_connect_error(self):
+        log.error('Crisp RTM 连接失败')
 
+    async def _on_disconnect(self):
+        log.warning('已与 Crisp RTM 服务器断开')
 
-def sendImageMessageBuilder(message):
-    session_id = message["session_id"]
-    text = "📠<b>Crisp消息推送</b>\n"
-    # Session打个码
-    text = f"{text}\n🧷<b>Session</b>：<tg-spoiler>{session_id}</tg-spoiler>"
-    return text
+    async def _on_session_set_data(self, data):
+        session_id = data.get('session_id')
+        cached = self.conversationMetasDict.get(session_id)
+        if cached is None:
+            return
+        cached.setdefault('data', {}).update(data.get('data') or {})
 
+    async def _on_message_send(self, data):
+        session_id = data.get('session_id')
+        try:
+            if session_id not in self.conversationMetasDict:
+                self.storeCrispConversationMetas(session_id)
+            message_type = data.get('type')
+            if message_type == 'text':
+                await self.sendTextMessage(data)
+            elif message_type == 'file' and 'image' in str((data.get('content') or {}).get('type', '')):
+                await self.sendImageMessage(data)
+            else:
+                log.info('忽略未处理的消息类型：%s（会话 %s）', message_type, session_id)
+        except Exception as err:
+            log.exception('处理 Crisp 消息失败（会话 %s）', session_id)
+            bus.event('error', f'处理 Crisp 消息失败：{err}', session_id=session_id)
 
-async def sendTextMessage(message):
-    session_id = message["session_id"]
-    text = sendTextMessageBuilder(message)
-    for admin_id in config["bot"]["admin_id"]:
-        await callbackContext.bot.send_message(
-            chat_id=admin_id, text=text, parse_mode="HTML"
+    # ---------- 业务 ----------
+
+    def storeCrispConversationMetas(self, session_id):
+        self.conversationMetasDict[session_id] = self.client.website.get_conversation_metas(
+            self.website_id, session_id)
+
+    def getCrispConnectEndpoints(self):
+        url = 'https://api.crisp.chat/v1/plugin/connect/endpoints'
+        authtier = base64.b64encode(
+            (self.config['crisp']['id'] + ':' + self.config['crisp']['key']).encode('utf-8')
+        ).decode('utf-8')
+        headers = {'X-Crisp-Tier': 'plugin', 'Authorization': 'Basic ' + authtier}
+        response = requests.request('GET', url, headers=headers, data='')
+        endPoint = json.loads(response.text).get('data').get('socket').get('app')
+        return endPoint
+
+    async def sendTextMessage(self, message):
+        session_id = message['session_id']
+        metas = self.conversationMetasDict.get(session_id) or {}
+
+        matched, autoreply = match_autoreply(self.config.get('autoreply'), message['content'])
+        text = build_push_text(metas, message['content'], session_id,
+                               autoreply=autoreply if matched else '')
+        if matched:
+            self.client.website.send_message_in_conversation(self.website_id, session_id, {
+                'type': 'text',
+                'content': autoreply,
+                'from': 'operator',
+                'origin': 'chat',
+            })
+            bus.event('autoreply', autoreply, session_id=session_id)
+            log.info('会话 %s 命中自动回复', session_id)
+
+        for admin_id in self.config['bot']['admin_id']:
+            await self.context.bot.send_message(chat_id=admin_id, text=text, parse_mode='HTML')
+        self.mark_messages_read(message)
+        log.info('已推送文本消息到 Telegram（会话 %s）', session_id)
+        bus.event('message_in', message['content'], session_id=session_id,
+                  msg_type='text', status='ok')
+
+    async def sendImageMessage(self, message):
+        session_id = message['session_id']
+        text = build_push_text({}, '', session_id, image_only=True)
+        for admin_id in self.config['bot']['admin_id']:
+            await self.context.bot.send_photo(
+                chat_id=admin_id,
+                photo=message['content']['url'],
+                caption=text,
+                parse_mode='HTML',
+            )
+        self.mark_messages_read(message)
+        log.info('已推送图片消息到 Telegram（会话 %s）', session_id)
+        bus.event('message_in', '[图片]', session_id=session_id, msg_type='image', status='ok')
+
+    def mark_messages_read(self, message):
+        self.client.website.mark_messages_read_in_conversation(
+            self.website_id,
+            message['session_id'],
+            {'from': 'user', 'origin': 'chat', 'fingerprints': [message['fingerprint']]},
         )
-    client.website.mark_messages_read_in_conversation(
-        website_id,
-        session_id,
-        {"from": "user", "origin": "chat", "fingerprints": [message["fingerprint"]]},
-    )
 
-
-async def sendImageMessage(message):
-    session_id = message["session_id"]
-    text = sendImageMessageBuilder(message)
-    for admin_id in config["bot"]["admin_id"]:
-        await callbackContext.bot.send_photo(
-            chat_id=admin_id,
-            photo=message["content"]["url"],
-            caption=text,
-            parse_mode="HTML",
-        )
-    client.website.mark_messages_read_in_conversation(
-        website_id,
-        session_id,
-        {"from": "user", "origin": "chat", "fingerprints": [message["fingerprint"]]},
-    )
-
-# Send all unread message.
-async def sendAllUnread():
-    conversations = client.website.search_conversations(
-        website_id, 1, filter_unread='1')
-    if len(conversations) > 0:
-        query = {}
+    # Send all unread message.
+    async def sendAllUnread(self):
+        conversations = self.client.website.search_conversations(
+            self.website_id, 1, filter_unread='1')
+        if len(conversations) == 0:
+            return
         for conversation in conversations:
             session_id = conversation['session_id']
-            messages = client.website.get_messages_in_conversation(website_id, session_id, query)
-            if conversationMetasDict.get(session_id) == None:
-                storeCrispConversationMetas(session_id)
+            messages = self.client.website.get_messages_in_conversation(
+                self.website_id, session_id, {})
+            if session_id not in self.conversationMetasDict:
+                self.storeCrispConversationMetas(session_id)
             for message in messages:
                 if len(message['read']) == 0:
-                    if message["type"] == "text":
-                        await sendTextMessage(message)
-                    elif message["type"] == "file" and str(message["content"]["type"]).count("image") > 0:
-                        await sendImageMessage(message)
+                    if message['type'] == 'text':
+                        await self.sendTextMessage(message)
+                    elif message['type'] == 'file' and 'image' in str(message['content']['type']):
+                        await self.sendImageMessage(message)
                     else:
-                        print("Unhandled Message Type : ", message["type"])
+                        log.info('忽略未处理的消息类型：%s（会话 %s）', message['type'], session_id)
 
-# Def Event Handlers
-@sio.on("connect")
-async def connect():
-    await sio.emit("authentication", sioAuthenticateTier)
+    # Connecting to Crisp RTM(WSS) Server
+    async def start(self):
+        await self.sio.connect(
+            self.getCrispConnectEndpoints(),
+            transports='websocket',
+            wait_timeout=10,
+        )
+        await self.sio.wait()
 
-
-@sio.on("unauthorized")
-async def unauthorized(data):
-    pass
-    print('Unauthorized: ', data)
-
-@sio.on("session:set_data")
-async def updateMetasDataNode(data):
-    for key in data.get('data'):
-        conversationMetasDict[data['session_id']]['data'][key]=data['data'][key]
-    pass
-
-@sio.on("message:send")
-async def messageForward(data):
-    session_id = data["session_id"]
-    try:
-        if conversationMetasDict.get(session_id) == None:
-            storeCrispConversationMetas(session_id)
-        if data["type"] == "text":
-            await sendTextMessage(data)
-        elif data["type"] == "file" and str(data["content"]["type"]).count("image") > 0:
-            await sendImageMessage(data)
-        else:
-            print("Unhandled Message Type : ", data["type"])
-    except Exception as err:
-        print(err)
-
-@sio.event
-async def connect_error():
-    print("The connection failed!")
+    async def stop(self):
+        try:
+            await self.sio.disconnect()
+        except Exception as err:
+            log.warning('断开 Crisp RTM 连接时出错：%s', err)
 
 
-@sio.event
-async def disconnect():
-    print("Disconnected from server.")
+_bridge = None
 
 
-# Connecting to Crisp RTM(WSS) Server
-async def start_server():
-    await sio.connect(
-        getCrispConnectEndpoints(),
-        transports="websocket",
-        wait_timeout=10,
-    )
-    await sio.wait()
+async def exec(context):
+    """事件驱动入口：先排空历史未读，再挂到 RTM 长连接上。"""
+    global _bridge
+    config = runtime.get_config()
+    client = runtime.get_crisp_client()
+    if config is None or client is None:
+        log.error('运行时未就绪，RTM 模块无法启动')
+        return
+    _bridge = CrispRtmBridge(config, client, context)
+    await _bridge.sendAllUnread()
+    await _bridge.start()
 
 
-# _(:з」∠)_
-async def exec(context: ContextTypes.DEFAULT_TYPE):
-    global callbackContext
-    callbackContext = context
-    await sendAllUnread()
-    await start_server()
+async def stop(context=None):
+    global _bridge
+    if _bridge is not None:
+        await _bridge.stop()
+        _bridge = None

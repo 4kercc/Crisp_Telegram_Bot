@@ -1,6 +1,10 @@
 - [Crisp Telegram Bot via Python](#crisp-telegram-bot-via-python)
   - [现有功能](#现有功能)
   - [计划功能](#计划功能)
+  - [Web 控制台（推荐）](#web-控制台推荐)
+    - [启动控制台](#启动控制台)
+    - [控制台功能](#控制台功能)
+    - [控制台启动参数与环境变量](#控制台启动参数与环境变量)
   - [常规使用](#常规使用)
   - [申请 Telegram Bot Token](#申请-telegram-bot-token)
   - [申请 Crisp 以及 MarketPlace 插件](#申请-crisp-以及-marketplace-插件)
@@ -27,6 +31,7 @@ Python 版本需求 >= 3.8
 - 自动推送文字、图片到指定聊天
 - 自动基于关键词回复对应内容
 - 支持回复后推送回对应客户
+- 内置 Web 控制台：网页端完成参数配置、连通性测试、实时查看请求记录
 
 ## 计划功能
 - 回复图片功能（需要Crisp订阅）
@@ -34,7 +39,43 @@ Python 版本需求 >= 3.8
 - 基础回复语料库模型
 - 客制化产品语料库模型
 
+## Web 控制台（推荐）
+
+无需手动编辑 config.yml，机器人引擎内置于控制台进程中，可随时在网页上启动/停止/重启。
+
+### 启动控制台
+```
+git clone https://github.com/DyAxy/Crisp_Telegram_Bot.git
+cd Crisp_Telegram_Bot
+pip3 install -r requirements.txt
+python3 bot.py
+# 浏览器打开 http://127.0.0.1:8000
+```
+首次打开会要求设置控制台访问密码（至少 6 位，哈希后保存在 config.yml 的 console 段），
+之后所有配置都在网页上完成并保存为 config.yml。配置完整时引擎会在启动时自动运行。
+
+### 控制台功能
+- **状态总览**：引擎运行状态、启停/重启按钮、运行信息与消息转发统计
+- **参数配置**：Bot Token、admin_id、Crisp 凭据、消息模式（RTM/REST）、轮询间隔、
+  可选代理、自动回复规则；密钥脱敏显示，留空即保持原值；保存后运行中的引擎自动热重启
+- **连通性测试**：一键验证 Crisp 凭据与 Telegram Bot Token，显示结果与延迟
+- **实时记录**：运行日志（可按级别过滤）与消息转发记录（方向/会话/内容），1 秒增量刷新
+
+### 控制台启动参数与环境变量
+| 选项/参数        | 说明                                                                 |
+| ---------------- | -------------------------------------------------------------------- |
+| `--host`         | 控制台监听地址，默认 `127.0.0.1`（仅本机）。远程访问用 `0.0.0.0` 并务必设置密码 |
+| `--port`         | 控制台监听端口，默认 `8000`                                           |
+| CONSOLE_HOST     | 环境变量，作用同 `--host`                                             |
+| CONSOLE_PORT     | 环境变量，作用同 `--port`                                             |
+| CONSOLE_PASSWORD | 环境变量，首次启动时直接初始化控制台密码（适合 Docker 无人值守部署）    |
+
+> 安全提示：控制台可查看/修改全部凭据。监听 `0.0.0.0` 时请设置高强度密码，
+> 并建议用 Nginx 反代 + HTTPS 或防火墙限制访问来源。
+
 ## 常规使用
+> 推荐：直接跳过本节，使用上文 [Web 控制台](#web-控制台推荐) 完成配置。
+> 以下为手动编辑 config.yml 的传统方式，两种方式共存，配置文件格式一致。
 ```
 # apt install git 如果你没有git的话
 git clone https://github.com/DyAxy/Crisp_Telegram_Bot.git
@@ -113,6 +154,9 @@ systemctl status crisp_telegram_bot
 容器未挂载config.yml时，entrypoint.sh会根据环境变量生成config.yml。  
 | 选项/参数     | 说明                                                                                                              |
 | ------------- | ----------------------------------------------------------------------------------------------------------------- |
+| CONSOLE_HOST  | 控制台监听地址，容器内访问需为 0.0.0.0（compose 示例已设置）                                                        |
+| CONSOLE_PORT  | 控制台监听端口，默认 8000（compose 已映射）                                                                          |
+| CONSOLE_PASSWORD | 控制台密码，仅首次启动初始化时生效；留空则首次打开网页时设置                                                       |
 | BOT_TOKEN     |                                                                                                                   |
 | BOT_ADMIN_ID  | 管理员tg id，使用半角逗号(,)分隔。<br>e.g. 123456789,321654987,555555,111222                                      |
 | CRISP_ID      | Crisp Marketplace 插件 ID                                                                                         |

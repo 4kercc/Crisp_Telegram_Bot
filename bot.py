@@ -1,99 +1,103 @@
+"""Crisp Telegram Bot —— 带 Web 控制台的入口。
+
+用法：
+    python3 bot.py                  # 控制台默认监听 127.0.0.1:8000
+    python3 bot.py --host 0.0.0.0 --port 9000
+    # 也可用环境变量 CONSOLE_HOST / CONSOLE_PORT 控制，CONSOLE_PASSWORD 用于
+    # Docker 等场景首次启动时直接初始化控制台密码。
+"""
+import argparse
 import logging
-import yaml
+import os
 import sys
-import re
+import threading
 
-from telegram import __version__ as TG_VER
-from telegram import Update
-from crisp_api import Crisp
-
-try:
-    from telegram import __version_info__
-except ImportError:
-    __version_info__ = (0, 0, 0, 0, 0)  # type: ignore[assignment]
-if __version_info__ < (20, 0, 0, "alpha", 1):
-    raise RuntimeError(
-        f"This bot is not compatible with your current PTB version {TG_VER}. To upgrade use this command:"
-        f"pip3 install python-telegram-bot --upgrade --pre"
-    )
-from telegram.ext import Application, MessageHandler, ContextTypes, filters
+if getattr(sys, 'frozen', False):
+    # PyInstaller 打包后：config.yml 等可变文件放在可执行文件同目录
+    BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logging.getLogger(__name__)
 
-VERSION = "2.0"
+from core.config_manager import ConfigManager               # noqa: E402
+from core.engine import BotEngine, EngineError              # noqa: E402
+from core.logbus import bus, install_handler                # noqa: E402
+from core.runtime import runtime                            # noqa: E402
 
-try:
-    f = open('config.yml', 'r', encoding='utf-8')
-    config = yaml.safe_load(f)
-    if 'autoreply' not in config:
-        with open("config.yml", "w", encoding="utf-8") as f:
-            config['autoreply'] = {'在吗|你好': '欢迎使用客服系统，请等待客服回复你~'}
-            print(config)
-            yaml.dump(config, f, allow_unicode=True)
-except FileNotFoundError as error:
-    print('没有找到 config.yml，请复制 config.yml.example 并重命名为 config.yml')
-    sys.exit(0)
-
-try:
-    client = Crisp()
-    client.set_tier("plugin")
-    client.authenticate(config['crisp']['id'], config['crisp']['key'])
-    client.plugin.get_connect_account()
-    client.website.get_website(config['crisp']['website'])
-except Exception as error:
-    print('无法连接 Crisp 服务，请确认 Crisp 配置项是否正确')
-    sys.exit(0)
-
-try:
-    token = config['bot']['token']
-    #proxy = 'http://127.0.0.1:7890'
-    app = Application.builder().token(token).build()
-    #app = Application.builder().token(token).proxy_url(proxy).get_updates_proxy_url(proxy).build()
-except Exception as error:
-    print('无法启动 Telegram Bot，请确认 Bot Token 是否正确，或者是否能连接 Telegram 服务器')
-    sys.exit(0)
+log = logging.getLogger('main')
 
 
-async def onReply(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    msg = update.effective_message
-    website_id = config['crisp']['website']
-    if msg.reply_to_message.text is not None:
-        session_id = re.search(
-            'session_\w{8}(-\w{4}){3}-\w{12}', msg.reply_to_message.text).group()
-    elif msg.reply_to_message.caption is not None:
-        session_id = re.search(
-            'session_\w{8}(-\w{4}){3}-\w{12}', msg.reply_to_message.caption).group()
-    query = {
-        "type": "text",
-        "content": msg.text,
-        "from": "operator",
-        "origin": "chat"
-    }
-    client.website.send_message_in_conversation(website_id, session_id, query)
+def parse_args():
+    parser = argparse.ArgumentParser(description='Crisp Telegram Bot（Web 控制台版）')
+    parser.add_argument('--host', default=None, help='控制台监听地址（默认 127.0.0.1）')
+    parser.add_argument('--port', type=int, default=None, help='控制台监听端口（默认 8000）')
+    return parser.parse_args()
+
+
+def auto_start_engine(engine):
+    """配置完整时后台自动启动机器人引擎，失败不阻断控制台。"""
+    try:
+        status = engine.start()
+        if status['state'] == 'error':
+            log.error('机器人引擎自动启动失败：%s', status.get('last_error'))
+        elif status['state'] == 'running':
+            log.info('机器人引擎自动启动完成')
+        else:
+            log.info('机器人引擎正在后台启动（当前状态：%s）', status['state'])
+    except EngineError as err:
+        log.error('机器人引擎自动启动失败：%s（可在控制台修改配置后重试）', err)
 
 
 def main():
+    args = parse_args()
+    host = args.host or os.environ.get('CONSOLE_HOST') or '127.0.0.1'
+    port = args.port or int(os.environ.get('CONSOLE_PORT') or 8000)
+
+    install_handler()
+    runtime.console_host = host
+    runtime.console_port = port
+
+    cm = ConfigManager(os.path.join(BASE_DIR, 'config.yml'))
+    runtime.config_manager = cm
+
+    env_password = os.environ.get('CONSOLE_PASSWORD')
+    if env_password and not cm.has_password():
+        cm.set_password(env_password)
+        log.info('已通过环境变量 CONSOLE_PASSWORD 初始化控制台密码')
+
+    engine = BotEngine(cm)
+    runtime.engine = engine
+
+    if cm.exists():
+        if cm.is_complete():
+            threading.Thread(
+                target=auto_start_engine, args=(engine,),
+                name='engine-autostart', daemon=True,
+            ).start()
+        else:
+            log.warning('config.yml 配置不完整，机器人未启动，请在控制台完成配置')
+    else:
+        log.info('尚未创建 config.yml，请在控制台完成首次配置（将自动生成）')
+
+    from core.webapp import create_app
+    app = create_app()
+
+    from werkzeug.serving import make_server
+    server = make_server(host, port, app, threaded=True)
+    log.info('Web 控制台已启动：http://%s:%s', host if host != '0.0.0.0' else '127.0.0.1', port)
+    if host in ('0.0.0.0', '::'):
+        log.warning('控制台正监听所有网卡（%s），请确保已设置控制台密码或配置防火墙！', host)
     try:
-        app.add_handler(MessageHandler(filters.REPLY & filters.TEXT, onReply))
-        # 导入任务文件夹
-        import Modules
-        for i in Modules.content:
-            mods = getattr(Modules, i)
-            Conf = mods.Conf
-            if Conf.enable:
-                if Conf.method == 'repeating':
-                    app.job_queue.run_repeating(
-                        mods.exec, interval=Conf.interval, name=i)
-                if Conf.method == 'events':
-                    app.job_queue.run_once(mods.exec,5,name=i)
-        # 启动 Bot
-        app.run_polling(drop_pending_updates=True)
-    except Exception as error:
-        print(error)
-        sys.exit(0)
+        server.serve_forever()
+    except KeyboardInterrupt:
+        log.info('收到退出信号，正在停止机器人引擎…')
+        try:
+            engine.stop()
+        except Exception:
+            pass
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

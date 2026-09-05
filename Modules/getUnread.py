@@ -1,104 +1,112 @@
-from telegram.ext import ContextTypes
-import bot
+"""REST 模式：定时轮询 Crisp 未读会话并推送到 Telegram。"""
+import logging
 
-config = bot.config
-client = bot.client
+from core.logbus import bus
+from core.runtime import runtime
+from core.templates import build_push_text, match_autoreply
+
+log = logging.getLogger('mod.getUnread')
 
 
 class Conf:
     desc = '推送未读新消息'
     method = 'repeating'
     interval = 60
-    enable = False
-
-if config['crisp']['msgapi'] == 'rest':
-    Conf.enable = True
-
-def getKey(content: str):
-    if len(config['autoreply']) > 0:
-        for x in config['autoreply']:
-            keyword = x.split('|')
-            for key in keyword:
-                if key in content:
-                    return True, config['autoreply'][x]
-    return False, ''
 
 
-async def exec(context: ContextTypes.DEFAULT_TYPE):
+def enabled(config):
+    return config['crisp']['msgapi'] == 'rest'
+
+
+def get_interval(config):
+    try:
+        return max(5, int(config['crisp'].get('poll_interval') or 60))
+    except (TypeError, ValueError):
+        return 60
+
+
+async def exec(context):
+    config = runtime.get_config()
+    client = runtime.get_crisp_client()
+    if config is None or client is None:
+        log.warning('运行时未就绪，本轮跳过')
+        return
     website_id = config['crisp']['website']
-    conversations = client.website.search_conversations(
-        website_id, 1, filter_unread='1')
-    if len(conversations) > 0:
-        data = {
-            "from": "user",
-            "origin": "chat",
-            "fingerprints": []
-        }
-        query = {
 
-        }
-        for conversation in conversations:
-            session_id = conversation['session_id']
-            # Crisp api docs: Returns the last batch of messages. 这个last batch到底能有多少我没整明白.
-            messages = client.website.get_messages_in_conversation(website_id, session_id, query)
-            metas = client.website.get_conversation_metas(website_id, session_id)
-            for message in messages:
-                # read长度为0时该条消息未读
-                if len(message['read']) == 0:
-                    # 筛选出文本消息
-                    if message['type'] == 'text':
-                        # 通过消息指纹将消息置为已读
-                        data['fingerprints'] = [message['fingerprint']]
-                        client.website.mark_messages_read_in_conversation(website_id, session_id, data)
-                        text = '📠<b>Crisp消息推送</b>\n'
-                        if len(metas['email']) > 0:
-                            email = metas['email']
-                            text = f'{text}📧<b>电子邮箱</b>：{email}\n'
-                        if len(metas['data']) > 0:
-                            if 'Plan' in metas['data']:
-                                Plan = metas['data']['Plan']
-                                text = f'{text}🪪<b>使用套餐</b>：{Plan}\n'
-                            if 'UsedTraffic' in metas['data'] and 'AllTraffic' in metas['data']:
-                                UsedTraffic = metas['data']['UsedTraffic']
-                                AllTraffic = metas['data']['AllTraffic']
-                                text = f'{text}🗒<b>流量信息</b>：{UsedTraffic} / {AllTraffic}\n'
-                        content = message['content']
-                        text = f'{text}🧾<b>消息内容</b>：{content}\n'
-                        # 自动回复判定
-                        result, autoreply = getKey(message['content'])
-                        if result is True:
-                            text = f'{text}💡<b>自动回复</b>：{autoreply}\n'
-                            query = {
-                                "type": "text",
-                                "content": autoreply,
-                                "from": "operator",
-                                "origin": "chat"
-                            }
-                            client.website.send_message_in_conversation(website_id, session_id, query)
-                        # Session打个码
-                        text = f'{text}\n🧷<b>Session</b>：<tg-spoiler>{session_id}</tg-spoiler>'
-                        for admin_id in config['bot']['admin_id']:
-                            await context.bot.send_message(
-                                chat_id=admin_id,
-                                text=text,
-                                parse_mode='HTML'
-                            )
-                    # 筛选出文件类型消息
-                    if message['type'] == 'file':
-                        # 通过文件mime type筛选出含image消息
-                        mime = str(message['content']['type'])
-                        if mime.count('image') > 0:
-                            # 通过消息指纹将消息置为已读
-                            data['fingerprints'] = [message['fingerprint']]
-                            client.website.mark_messages_read_in_conversation(website_id, session_id, data)
+    conversations = client.website.search_conversations(website_id, 1, filter_unread='1')
+    if len(conversations) == 0:
+        return
+    mark_read_query = {
+        'from': 'user',
+        'origin': 'chat',
+        'fingerprints': []
+    }
+    for conversation in conversations:
+        session_id = conversation['session_id']
+        # Crisp api docs: Returns the last batch of messages. 这个last batch到底能有多少我没整明白.
+        messages = client.website.get_messages_in_conversation(website_id, session_id, {})
+        metas = client.website.get_conversation_metas(website_id, session_id)
+        for message in messages:
+            # read长度为0时该条消息未读
+            if len(message['read']) != 0:
+                continue
+            try:
+                if message['type'] == 'text':
+                    await _push_text(context, client, config, website_id, session_id, metas, message)
+                elif message['type'] == 'file' and 'image' in str(message['content']['type']):
+                    await _push_image(context, client, config, website_id, session_id, message)
+                else:
+                    log.info('忽略未处理的消息类型：%s（会话 %s）', message['type'], session_id)
+            except Exception as err:
+                log.exception('处理 Crisp 消息失败（会话 %s）', session_id)
+                bus.event('error', f'处理 Crisp 消息失败：{err}', session_id=session_id)
 
-                            text = '📠<b>Crisp消息推送</b>\n'
-                            # Session打个码
-                            text = f'{text}\n🧷<b>Session</b>：<tg-spoiler>{session_id}</tg-spoiler>'
-                            for admin_id in config['bot']['admin_id']:
-                                await context.bot.send_photo(
-                                    chat_id=admin_id,
-                                    photo=message['content']['url'],
-                                    caption=text,
-                                    parse_mode='HTML'
-                                )
+
+async def _push_text(context, client, config, website_id, session_id, metas, message):
+    # 通过消息指纹将消息置为已读
+    mark_read(client, website_id, session_id, message['fingerprint'])
+
+    matched, autoreply = match_autoreply(config.get('autoreply'), message['content'])
+    text = build_push_text(metas, message['content'], session_id, autoreply=autoreply if matched else '')
+
+    if matched:
+        client.website.send_message_in_conversation(website_id, session_id, {
+            'type': 'text',
+            'content': autoreply,
+            'from': 'operator',
+            'origin': 'chat',
+        })
+        bus.event('autoreply', autoreply, session_id=session_id)
+        log.info('会话 %s 命中自动回复', session_id)
+
+    for admin_id in config['bot']['admin_id']:
+        await context.bot.send_message(chat_id=admin_id, text=text, parse_mode='HTML')
+
+    log.info('已推送文本消息到 Telegram（会话 %s）', session_id)
+    bus.event('message_in', message['content'], session_id=session_id,
+              msg_type='text', status='ok')
+
+
+async def _push_image(context, client, config, website_id, session_id, message):
+    # 通过消息指纹将消息置为已读
+    mark_read(client, website_id, session_id, message['fingerprint'])
+
+    text = build_push_text({}, '', session_id, image_only=True)
+    for admin_id in config['bot']['admin_id']:
+        await context.bot.send_photo(
+            chat_id=admin_id,
+            photo=message['content']['url'],
+            caption=text,
+            parse_mode='HTML',
+        )
+
+    log.info('已推送图片消息到 Telegram（会话 %s）', session_id)
+    bus.event('message_in', '[图片]', session_id=session_id, msg_type='image', status='ok')
+
+
+def mark_read(client, website_id, session_id, fingerprint):
+    client.website.mark_messages_read_in_conversation(website_id, session_id, {
+        'from': 'user',
+        'origin': 'chat',
+        'fingerprints': [fingerprint],
+    })

@@ -1,12 +1,20 @@
+# 完整配置可由 Web 控制台自动生成与维护（推荐）：
+#   1. 直接运行 python3 bot.py
+#   2. 浏览器打开 http://127.0.0.1:8000 按提示初始化密码并填写配置
+# 以下为手动参考模板。
 bot:
   token: 1234:1234567890abcdef
   admin_id:
     - 0
     - 0
+  # 可选：访问 Telegram API 使用的代理，例如 http://127.0.0.1:7890
+  proxy:
 crisp:
-  id: 
-  key: 
-  website: 
-  msgapi: rtm
+  id:
+  key:
+  website:
+  msgapi: rtm          # rtm = WebSocket 实时推送；rest = 定时轮询
+  poll_interval: 60    # msgapi 为 rest 时的轮询间隔（秒）
 autoreply:
   '在吗|你好' : '欢迎使用客服系统，请等待客服回复你~'
+# console 段由程序自动维护（控制台密码哈希、session 密钥），请勿手动编辑

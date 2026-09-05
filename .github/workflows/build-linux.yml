@@ -1,0 +1,46 @@
+name: Build Linux Binary
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: python:3.11-bullseye   # glibc 2.31，兼容 Debian 11+ / Ubuntu 20.04+ / CentOS 8+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: bash scripts/build_linux.sh
+
+      - name: Smoke test
+        working-directory: dist
+        run: |
+          ./crisp_tgbot --port 8123 &
+          for i in $(seq 1 30); do
+            sleep 1
+            curl -sf http://127.0.0.1:8123/api/auth/state && echo && break
+          done
+          curl -sf http://127.0.0.1:8123/ | head -1
+          pkill -f crisp_tgbot || true
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: linux-binary-${{ github.run_number }}
+          name: Linux 二进制 #${{ github.run_number }}
+          body: |
+            单文件 Linux 可执行程序（x86_64，glibc 2.31 构建，兼容 Debian 11+ / Ubuntu 20.04+ / CentOS 8+）。
+
+            ```
+            chmod +x crisp_tgbot
+            ./crisp_tgbot                    # 默认监听 127.0.0.1:8000
+            ./crisp_tgbot --host 0.0.0.0     # 远程访问
+            ```
+            浏览器打开控制台完成首次配置；config.yml 生成在可执行文件同目录。
+          files: dist/crisp_tgbot

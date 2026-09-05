@@ -13,3 +13,4 @@ ADD / /Crisp_Telegram_Bot
 WORKDIR /Crisp_Telegram_Bot
 ENTRYPOINT [ "./docker-entrypoint.sh" ]
 CMD ["python3","bot.py"]
+EXPOSE 8000

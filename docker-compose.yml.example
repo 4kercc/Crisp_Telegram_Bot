@@ -8,14 +8,18 @@ services:
     image: heaid/crisp_tgbot
 #    volumes:
 #      - "<Crisp_Telegram_Bot_data>/config.yml:/Crisp_Telegram_Bot/config.yml"
+    ports:
+      - "8000:8000"          # Web 控制台，浏览器访问 http://服务器IP:8000
     restart: always
     environment:
       TZ: Asia/Shanghai
-      BOT_TOKEN: 
-      BOT_ADMIN_ID: 
-      CRISP_ID: 
-      CRISP_KEY: 
-      CRISP_WEBSITE: 
+      CONSOLE_HOST: 0.0.0.0  # 容器内需监听 0.0.0.0 才能从外部访问控制台
+      CONSOLE_PASSWORD:      # 控制台密码（至少 6 位；强烈建议设置，也可首次打开网页时设置）
+      BOT_TOKEN:
+      BOT_ADMIN_ID:
+      CRISP_ID:
+      CRISP_KEY:
+      CRISP_WEBSITE:
       CRISP_MSGAPI: rtm
       BOT_AUTOREPLY: |
         \0  '在吗|你好' : '欢迎使用客服系统，请等待客服回复你~'

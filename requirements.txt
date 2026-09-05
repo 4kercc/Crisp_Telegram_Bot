@@ -3,3 +3,4 @@ python_telegram_bot==20.0a4
 PyYAML==6.0
 aiohttp==3.8.4
 python-socketio==5.8.0
+Flask==3.0.3
