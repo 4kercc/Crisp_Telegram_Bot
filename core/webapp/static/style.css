@@ -213,6 +213,7 @@ button.ghost { background: transparent; }
 .badge-system { background: rgba(139, 150, 173, .15); color: var(--text-dim); }
 .evt-content { word-break: break-all; color: var(--text); }
 .evt-session { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); }
+.evt-email { font-size: 12.5px; color: var(--text); word-break: break-all; }
 
 /* ---------- 其他 ---------- */
 .banner {

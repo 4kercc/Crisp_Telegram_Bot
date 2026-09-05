@@ -22,3 +22,24 @@ def record(chat_id, message_id, session_id):
 def lookup(chat_id, message_id):
     with _lock:
         return _map.get((chat_id, message_id))
+
+
+# ---------- 会话 → 用户邮箱（供控制台消息记录展示） ----------
+
+CAPACITY_EMAIL = 2000
+_email_map = OrderedDict()
+
+
+def record_email(session_id, email):
+    if not session_id or not email:
+        return
+    with _lock:
+        _email_map[session_id] = email
+        _email_map.move_to_end(session_id)
+        while len(_email_map) > CAPACITY_EMAIL:
+            _email_map.popitem(last=False)
+
+
+def lookup_email(session_id):
+    with _lock:
+        return _email_map.get(session_id)

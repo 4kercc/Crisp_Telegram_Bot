@@ -279,7 +279,8 @@ class BotEngine:
             self.crisp_client.website.send_message_in_conversation(
                 config['crisp']['website'], session_id, query)
             log.info('已把 Telegram 回复转发到 Crisp 会话 %s', session_id)
-            bus.event('message_out', message.text, session_id=session_id, status='ok')
+            bus.event('message_out', message.text, session_id=session_id,
+                      email=session_map.lookup_email(session_id), status='ok')
         except Exception as err:
             log.exception('转发回复到 Crisp 失败')
             bus.event('error', f'转发回复到 Crisp 失败：{err}', session_id=session_id)

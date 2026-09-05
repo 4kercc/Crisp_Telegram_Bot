@@ -97,8 +97,9 @@ class CrispRtmBridge:
     # ---------- 业务 ----------
 
     def storeCrispConversationMetas(self, session_id):
-        self.conversationMetasDict[session_id] = self.client.website.get_conversation_metas(
-            self.website_id, session_id)
+        metas = self.client.website.get_conversation_metas(self.website_id, session_id)
+        self.conversationMetasDict[session_id] = metas
+        session_map.record_email(session_id, metas.get('email'))
 
     def getCrispConnectEndpoints(self):
         url = 'https://api.crisp.chat/v1/plugin/connect/endpoints'
@@ -125,7 +126,7 @@ class CrispRtmBridge:
                 'from': 'operator',
                 'origin': 'chat',
             })
-            bus.event('autoreply', autoreply, session_id=session_id)
+            bus.event('autoreply', autoreply, session_id=session_id, email=metas.get('email'))
             log.info('会话 %s 命中自动回复', session_id)
 
         for admin_id in self.config['bot']['admin_id']:
@@ -134,7 +135,7 @@ class CrispRtmBridge:
         self.mark_messages_read(message)
         log.info('已推送文本消息到 Telegram（会话 %s）', session_id)
         bus.event('message_in', message['content'], session_id=session_id,
-                  msg_type='text', status='ok')
+                  msg_type='text', status='ok', email=metas.get('email'))
 
     async def sendImageMessage(self, message):
         session_id = message['session_id']
@@ -150,7 +151,8 @@ class CrispRtmBridge:
             session_map.record(admin_id, getattr(sent, 'message_id', None), session_id)
         self.mark_messages_read(message)
         log.info('已推送图片消息到 Telegram（会话 %s）', session_id)
-        bus.event('message_in', '[图片]', session_id=session_id, msg_type='image', status='ok')
+        bus.event('message_in', '[图片]', session_id=session_id, msg_type='image',
+                  status='ok', email=metas.get('email'))
 
     def mark_messages_read(self, message):
         self.client.website.mark_messages_read_in_conversation(

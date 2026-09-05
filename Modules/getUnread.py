@@ -42,6 +42,7 @@ async def exec(context):
         # Crisp api docs: Returns the last batch of messages. 这个last batch到底能有多少我没整明白.
         messages = client.website.get_messages_in_conversation(website_id, session_id, {})
         metas = client.website.get_conversation_metas(website_id, session_id)
+        session_map.record_email(session_id, metas.get('email'))
         for message in messages:
             # read长度为0时该条消息未读
             if len(message['read']) != 0:
@@ -74,7 +75,7 @@ async def _push_text(context, client, config, website_id, session_id, metas, mes
             'from': 'operator',
             'origin': 'chat',
         })
-        bus.event('autoreply', autoreply, session_id=session_id)
+        bus.event('autoreply', autoreply, session_id=session_id, email=metas.get('email'))
         log.info('会话 %s 命中自动回复', session_id)
 
     for admin_id in config['bot']['admin_id']:
@@ -83,7 +84,7 @@ async def _push_text(context, client, config, website_id, session_id, metas, mes
 
     log.info('已推送文本消息到 Telegram（会话 %s）', session_id)
     bus.event('message_in', message['content'], session_id=session_id,
-              msg_type='text', status='ok')
+              msg_type='text', status='ok', email=metas.get('email'))
 
 
 async def _push_image(context, client, config, website_id, session_id, message):
@@ -101,7 +102,8 @@ async def _push_image(context, client, config, website_id, session_id, message):
         session_map.record(admin_id, getattr(sent, 'message_id', None), session_id)
 
     log.info('已推送图片消息到 Telegram（会话 %s）', session_id)
-    bus.event('message_in', '[图片]', session_id=session_id, msg_type='image', status='ok')
+    bus.event('message_in', '[图片]', session_id=session_id, msg_type='image',
+              status='ok', email=metas.get('email'))
 
 
 def mark_read(client, website_id, session_id, fingerprint):

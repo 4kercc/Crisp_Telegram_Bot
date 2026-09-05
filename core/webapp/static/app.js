@@ -467,10 +467,15 @@ function appendEventRow(item, tbody, prepend) {
   tdSession.className = 'evt-session';
   tdSession.textContent = sess;
   tdSession.title = sess;
+  const tdEmail = document.createElement('td');
+  const email = item.email || '';
+  tdEmail.className = 'evt-email';
+  tdEmail.textContent = email || '—';
+  tdEmail.title = email;
   const tdContent = document.createElement('td');
   tdContent.className = 'evt-content';
   tdContent.textContent = item.message || '';
-  tr.append(tdTime, tdKind, tdSession, tdContent);
+  tr.append(tdTime, tdKind, tdSession, tdEmail, tdContent);
   if (prepend && tbody.firstChild) {
     tbody.insertBefore(tr, tbody.firstChild);
   } else {
