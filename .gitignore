@@ -144,3 +144,6 @@ dist/
 # 项目自身的打包配置与 CI 工作流需要纳入版本管理
 !crisp_tgbot.spec
 !.github/workflows/*.yml
+
+# 本地下载的二进制产物
+release/

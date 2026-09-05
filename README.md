@@ -1,6 +1,7 @@
 - [Crisp Telegram Bot via Python](#crisp-telegram-bot-via-python)
   - [现有功能](#现有功能)
   - [计划功能](#计划功能)
+  - [Linux 二进制（免安装 Python）](#linux-二进制免安装-python)
   - [Web 控制台（推荐）](#web-控制台推荐)
     - [启动控制台](#启动控制台)
     - [控制台功能](#控制台功能)
@@ -39,9 +40,26 @@ Python 版本需求 >= 3.8
 - 基础回复语料库模型
 - 客制化产品语料库模型
 
-## Web 控制台（推荐）
+## Linux 二进制（免安装 Python）
 
-无需手动编辑 config.yml，机器人引擎内置于控制台进程中，可随时在网页上启动/停止/重启。
+在 [Actions](https://github.com/4kercc/Crisp_Telegram_Bot/actions) 页面运行 **Build Linux Binary** 工作流（或向 `web-console` 分支推送改动自动触发），
+构建完成后在 [Releases](https://github.com/4kercc/Crisp_Telegram_Bot/releases) 下载单文件可执行程序 `crisp_tgbot`：
+
+```
+chmod +x crisp_tgbot
+./crisp_tgbot                    # 默认监听 127.0.0.1:8000，浏览器打开完成首次配置
+./crisp_tgbot --host 0.0.0.0 --port 9000
+```
+
+- 单文件、免安装 Python，内含全部依赖与控制台前端
+- 二进制基于 Debian 11（glibc 2.31）构建，兼容 Debian 11+ / Ubuntu 20.04+ / CentOS 8+ 等主流发行版
+- `config.yml` 生成在可执行文件同目录，控制台密码也保存在其中
+- 常驻可配合 systemd：`ExecStart=/opt/crisp_tgbot/crisp_tgbot`
+
+自行构建：把项目上传到任意 Linux（Python ≥ 3.8）执行 `bash scripts/build_linux.sh`，产物为 `dist/crisp_tgbot`；
+或直接使用仓库里的 `crisp_tgbot.spec`。
+
+## Web 控制台（推荐）无需手动编辑 config.yml，机器人引擎内置于控制台进程中，可随时在网页上启动/停止/重启。
 
 ### 启动控制台
 ```
