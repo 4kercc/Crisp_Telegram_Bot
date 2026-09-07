@@ -194,6 +194,7 @@ class BotEngine:
         app = builder.build()
         self._app = app
         app.add_handler(MessageHandler(filters.REPLY & filters.TEXT, self._on_reply))
+        app.add_error_handler(self._on_tg_error)
 
         import Modules
         self._modules = Modules.load(config)
@@ -215,6 +216,14 @@ class BotEngine:
             self.tg_username = app.bot.username
         except Exception:
             self.tg_username = None
+
+        # 启动前强制清理任何残留的 Webhook 设置，避免 409 Conflict (can't use getUpdates method while webhook is active)
+        try:
+            await app.bot.delete_webhook(drop_pending_updates=True)
+            log.info('已清除 Telegram Webhook 状态，准备开启长轮询')
+        except Exception as err:
+            log.warning('清除 Telegram Webhook 失败（可能无 Webhook 或网络抖动）：%s', err)
+
         await app.start()
         await app.updater.start_polling(drop_pending_updates=True)
 
@@ -272,6 +281,23 @@ class BotEngine:
             self.last_error = message
             self.started_at = None
         self._state_event.set()
+
+    async def _on_tg_error(self, update, context):
+        err = context.error
+        if err is not None:
+            err_msg = str(err)
+            if 'Conflict' in err_msg:
+                log.error('Telegram 报告连接冲突 (Conflict)：可能存在活跃 Webhook 或多个相同 Token 的 Bot 实例在同时运行！')
+                bus.event('error', 'Telegram 连接冲突：检测到活跃 Webhook 或多个 Bot 实例同时运行')
+                # 尝试再次强制清理 Webhook
+                try:
+                    if self._app and self._app.bot:
+                        await self._app.bot.delete_webhook(drop_pending_updates=True)
+                except Exception:
+                    pass
+            else:
+                log.error('Telegram 异常：%s', err)
+                bus.event('error', f'Telegram 异常：{err_msg}')
 
     # ---------- Telegram 回复 → Crisp ----------
 

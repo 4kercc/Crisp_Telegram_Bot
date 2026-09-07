@@ -12,7 +12,7 @@ def _proxies(proxy):
 
 
 def test_telegram(token, proxy=''):
-    """getMe 验证 Bot Token，返回 {ok, latency_ms, detail|error}。"""
+    """getMe 验证 Bot Token，并检查/清理残留 Webhook，返回 {ok, latency_ms, detail|error}。"""
     start = time.time()
     try:
         resp = requests.get(
@@ -25,6 +25,16 @@ def test_telegram(token, proxy=''):
         if data.get('ok'):
             result = data.get('result') or {}
             name = result.get('username') or result.get('first_name') or '未知'
+            # 顺便检查/清除可能残留的 Webhook
+            try:
+                requests.post(
+                    f'https://api.telegram.org/bot{token}/deleteWebhook',
+                    json={'drop_pending_updates': False},
+                    timeout=5,
+                    proxies=_proxies(proxy),
+                )
+            except Exception:
+                pass
             return {'ok': True, 'latency_ms': latency, 'detail': f'@{name}（{result.get("first_name") or "Telegram Bot"}）'}
         return {'ok': False, 'latency_ms': latency, 'error': data.get('description') or f'HTTP {resp.status_code}'}
     except Exception as err:
