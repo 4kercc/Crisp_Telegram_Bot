@@ -16,6 +16,28 @@ const state = {
   logTimer: null,
 };
 
+/* ---------- 主题切换 ---------- */
+
+function initTheme() {
+  const saved = localStorage.getItem('theme') || 'dark';
+  setTheme(saved);
+}
+
+function setTheme(theme) {
+  const isLight = theme === 'light';
+  document.documentElement.setAttribute('data-theme', isLight ? 'light' : 'dark');
+  localStorage.setItem('theme', isLight ? 'light' : 'dark');
+  const btn = $('#theme-toggle');
+  if (btn) {
+    btn.textContent = isLight ? '🌙 深色模式' : '☀️ 浅色模式';
+  }
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme') || 'dark';
+  setTheme(current === 'light' ? 'dark' : 'light');
+}
+
 /* ---------- 基础 ---------- */
 
 async function api(path, options = {}) {
@@ -595,6 +617,7 @@ function bindEvents() {
   $('#btn-start').addEventListener('click', () => engineAction('start'));
   $('#btn-stop').addEventListener('click', () => engineAction('stop'));
   $('#btn-restart').addEventListener('click', () => engineAction('restart'));
+  $('#theme-toggle').addEventListener('click', toggleTheme);
 
   $('#logout-btn').addEventListener('click', async () => {
     await api('/api/auth/logout', { method: 'POST' }).catch(() => {});
@@ -624,6 +647,7 @@ function bindEvents() {
 }
 
 async function init() {
+  initTheme();
   bindEvents();
   try {
     const { data } = await api('/api/auth/state');
