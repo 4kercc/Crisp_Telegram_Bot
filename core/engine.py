@@ -61,14 +61,16 @@ class BotEngine:
             self.last_error = None
             self._state_event.clear()
 
-        # 组建令牌池（多枚开发令牌轮换，规避 500 次/24h 限额）
+        # 组建令牌池（主凭据优先，其余作为备用自动轮换）
         crisp_cfg = config['crisp']
-        entries = [(str(t.get('id')).strip(), str(t.get('key')).strip())
-                   for t in (crisp_cfg.get('tokens') or [])
-                   if str(t.get('id') or '').strip() and str(t.get('key') or '').strip()]
         primary = (str(crisp_cfg['id']).strip(), str(crisp_cfg['key']).strip())
-        if primary not in entries:
-            entries.insert(0, primary)
+        entries = [primary]
+        for t in (crisp_cfg.get('tokens') or []):
+            tid = str(t.get('id') or '').strip()
+            tkey = str(t.get('key') or '').strip()
+            if tid and tkey and (tid, tkey) not in entries:
+                entries.append((tid, tkey))
+
         from core.token_pool import TokenPool, install_request_hook
         from core import runtime
         pool = TokenPool(entries)
@@ -150,23 +152,36 @@ class BotEngine:
         from crisp_api.errors.route import RouteError
 
         crisp_cfg = config['crisp']
-        try:
-            client = Crisp()
-            client.set_tier('plugin')
+        client = Crisp()
+        client.set_tier('plugin')
+        pool.bind_client(client)
+
+        last_error = None
+        # 遍历池中令牌，若有不可用的（如 404 not_subscribed / 401），自动切换尝试下一个
+        for attempt in range(len(pool._tokens)):
             current = pool.current()
-            client.authenticate(current.identifier, current.key)
-            pool.bind_client(client)
-            client.plugin.get_connect_account()
-            site = client.website.get_website(crisp_cfg['website']) or {}
-            self.crisp_website_name = site.get('name')
-            return client
-        except Exception as err:
-            message = str(err)
-            if err.__class__.__name__ == 'RouteError' and err.args and isinstance(err.args[0], dict):
-                info = err.args[0]
-                message = f"HTTP {info.get('code')}：{info.get('message')}"
-            self._set_error(f'Crisp 连接失败：{message}')
-            raise EngineError(f'Crisp 连接失败，请确认 Crisp 配置项是否正确（{message}）')
+            try:
+                client.authenticate(current.identifier, current.key)
+                client.plugin.get_connect_account()
+                site = client.website.get_website(crisp_cfg['website']) or {}
+                self.crisp_website_name = site.get('name')
+                if attempt > 0:
+                    log.info('已成功切换到可用令牌：%s…', current.identifier[:8])
+                return client
+            except Exception as err:
+                last_error = err
+                log.warning('令牌 %s… 连接 Crisp 失败：%s，尝试池中下一个令牌', current.identifier[:8], err)
+                pool.on_rate_limited()
+
+        message = str(last_error)
+        if last_error.__class__.__name__ == 'RouteError' and last_error.args and isinstance(last_error.args[0], dict):
+            info = last_error.args[0]
+            message = f"HTTP {info.get('code')}：{info.get('message')}"
+            detail = (info.get('data') or {}).get('message')
+            if detail:
+                message += f'（{detail}）'
+        self._set_error(f'Crisp 连接失败：{message}')
+        raise EngineError(f'Crisp 连接失败，请确认 Crisp 配置项是否正确（{message}）')
 
     def _thread_main(self):
         asyncio.set_event_loop(self._loop)
