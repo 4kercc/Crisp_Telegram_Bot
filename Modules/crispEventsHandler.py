@@ -128,7 +128,7 @@ class CrispRtmBridge:
         session_id = message['session_id']
         metas = self.conversationMetasDict.get(session_id) or {}
 
-        matched, autoreply = match_autoreply(self.config.get('autoreply'), message['content'])
+        matched, autoreply = match_autoreply(self.config.get('autoreply'), message['content'], metas=metas)
         text = build_push_text(metas, message['content'],
                                autoreply=autoreply if matched else '',
                                timestamp=message.get('timestamp'))

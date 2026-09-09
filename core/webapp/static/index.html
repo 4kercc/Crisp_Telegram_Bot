@@ -139,10 +139,12 @@
           </div>
 
           <div class="card">
-            <h3>自动回复</h3>
-            <p class="muted">关键词命中访客消息后，机器人会以客服身份自动回复。关键词支持用 <code>|</code> 分隔多个。</p>
+            <h3>自动回复与个性化规则</h3>
+            <p class="muted">
+              命中访客关键词后自动回复。支持限定访客属性（如 <code>VIP &gt; 0</code> 或 <code>VIP == 0</code> 等），回复内容支持引用变量（如 <code>{VIP}</code>、<code>{email}</code>、<code>{Traffic}</code>）。按从上到下顺序匹配，首条命中即生效。
+            </p>
             <div id="autoreply-rows"></div>
-            <button id="btn-add-autoreply" class="ghost">＋ 添加规则</button>
+            <button id="btn-add-autoreply" type="button" class="ghost">＋ 添加规则</button>
           </div>
 
           <div class="save-row">

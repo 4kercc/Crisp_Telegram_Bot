@@ -361,35 +361,123 @@ function updatePollIntervalVisibility() {
 function renderAutoreplyRows(rules) {
   const wrap = $('#autoreply-rows');
   wrap.innerHTML = '';
-  Object.entries(rules).forEach(([pattern, reply]) => addAutoreplyRow(pattern, reply));
+  if (Array.isArray(rules)) {
+    rules.forEach((rule) => {
+      if (typeof rule === 'object' && rule !== null) {
+        addAutoreplyRow(
+          rule.pattern || rule.keyword || '',
+          rule.field || '',
+          rule.op || rule.operator || '==',
+          rule.value !== undefined ? rule.value : (rule.val !== undefined ? rule.val : ''),
+          rule.reply || ''
+        );
+      }
+    });
+  } else if (typeof rules === 'object' && rules !== null) {
+    Object.entries(rules).forEach(([pattern, reply]) => {
+      addAutoreplyRow(pattern, '', '==', '', reply);
+    });
+  }
 }
 
-function addAutoreplyRow(pattern = '', reply = '') {
+function addAutoreplyRow(pattern = '', field = '', op = '==', val = '', reply = '') {
   const wrap = $('#autoreply-rows');
+  const count = wrap.children.length + 1;
   const row = document.createElement('div');
   row.className = 'autoreply-row';
-  const p = document.createElement('input');
-  p.placeholder = '关键词，可用 | 分隔';
-  p.value = pattern;
-  const r = document.createElement('input');
-  r.placeholder = '自动回复内容';
-  r.value = reply;
+
+  // 顶部标题与删除按钮
+  const header = document.createElement('div');
+  header.className = 'autoreply-header';
+  const tag = document.createElement('span');
+  tag.className = 'rule-tag';
+  tag.textContent = `规则 #${count}`;
   const del = document.createElement('button');
   del.type = 'button';
   del.className = 'ghost';
   del.textContent = '删除';
-  del.addEventListener('click', () => row.remove());
-  row.append(p, r, del);
+  del.addEventListener('click', () => {
+    row.remove();
+    updateRuleTags();
+  });
+  header.append(tag, del);
+
+  // 条件网格（关键词、字段、运算符、比较值）
+  const grid = document.createElement('div');
+  grid.className = 'autoreply-grid';
+
+  const pInput = document.createElement('input');
+  pInput.className = 'ar-pattern';
+  pInput.placeholder = '触发关键词（支持 | 分隔多个，如 id|苹果id）';
+  pInput.value = pattern;
+
+  const fInput = document.createElement('input');
+  fInput.className = 'ar-field';
+  fInput.placeholder = '属性字段（如 VIP/Money/email，留空=无限定）';
+  fInput.value = field;
+
+  const opSelect = document.createElement('select');
+  opSelect.className = 'ar-op';
+  [
+    { val: '==', label: '== 等于' },
+    { val: '>', label: '> 大于' },
+    { val: '>=', label: '>= 大于等于' },
+    { val: '<', label: '< 小于' },
+    { val: '<=', label: '<= 小于等于' },
+    { val: '!=', label: '!= 不等于' },
+    { val: 'contains', label: '包含' },
+    { val: 'exists', label: '存在/非空' },
+  ].forEach((opt) => {
+    const option = document.createElement('option');
+    option.value = opt.val;
+    option.textContent = opt.label;
+    if (opt.val === op) option.selected = true;
+    opSelect.appendChild(option);
+  });
+
+  const vInput = document.createElement('input');
+  vInput.className = 'ar-val';
+  vInput.placeholder = '比较值（如 0 或 VIP等级）';
+  vInput.value = val;
+
+  grid.append(pInput, fInput, opSelect, vInput);
+
+  // 回复文本框（支持多行与插值变量）
+  const rTextarea = document.createElement('textarea');
+  rTextarea.className = 'ar-reply';
+  rTextarea.placeholder = '自动回复内容（支持多行文本，支持变量如 {VIP}、{email}、{Money}、{Traffic} 等）';
+  rTextarea.value = reply;
+
+  row.append(header, grid, rTextarea);
   wrap.appendChild(row);
 }
 
-async function saveConfig() {
-  const autoreply = {};
-  $$('#autoreply-rows .autoreply-row').forEach((row) => {
-    const inputs = row.querySelectorAll('input');
-    const pattern = inputs[0].value.trim();
-    if (pattern) autoreply[pattern] = inputs[1].value;
+function updateRuleTags() {
+  $$('#autoreply-rows .autoreply-row').forEach((row, i) => {
+    const tag = row.querySelector('.rule-tag');
+    if (tag) tag.textContent = `规则 #${i + 1}`;
   });
+}
+
+function collectAutoreplyRules() {
+  return Array.from($$('#autoreply-rows .autoreply-row')).map((row) => {
+    const pattern = (row.querySelector('.ar-pattern')?.value || '').trim();
+    const field = (row.querySelector('.ar-field')?.value || '').trim();
+    const op = row.querySelector('.ar-op')?.value || '==';
+    const value = (row.querySelector('.ar-val')?.value || '').trim();
+    const reply = row.querySelector('.ar-reply')?.value || '';
+    const rule = { pattern, reply };
+    if (field) {
+      rule.field = field;
+      rule.op = op;
+      rule.value = value;
+    }
+    return rule;
+  }).filter((r) => r.pattern && r.reply.trim());
+}
+
+async function saveConfig() {
+  const autoreply = collectAutoreplyRules();
 
   const body = {
     bot: {

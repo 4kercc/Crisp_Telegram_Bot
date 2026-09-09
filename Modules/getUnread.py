@@ -63,7 +63,7 @@ async def _push_text(context, client, config, website_id, session_id, metas, mes
     # 通过消息指纹将消息置为已读
     mark_read(client, website_id, session_id, message['fingerprint'])
 
-    matched, autoreply = match_autoreply(config.get('autoreply'), message['content'])
+    matched, autoreply = match_autoreply(config.get('autoreply'), message['content'], metas=metas)
     text = build_push_text(metas, message['content'],
                            autoreply=autoreply if matched else '',
                            timestamp=message.get('timestamp'))

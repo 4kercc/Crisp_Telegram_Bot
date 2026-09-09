@@ -190,7 +190,23 @@ def save_config():
     crisp['tokens'] = tokens
 
     autoreply_in = body.get('autoreply')
-    if isinstance(autoreply_in, dict):
+    if isinstance(autoreply_in, list):
+        autoreply = []
+        for r in autoreply_in:
+            if isinstance(r, dict):
+                pat = str(r.get('pattern') or r.get('keyword') or '').strip()
+                rep = str(r.get('reply') or '')
+                if pat and rep.strip():
+                    field = str(r.get('field') or '').strip()
+                    op = str(r.get('op') or r.get('operator') or '*').strip()
+                    val = str(r.get('value') if r.get('value') is not None else r.get('val') or '').strip()
+                    rule = {'pattern': pat, 'reply': rep}
+                    if field and field not in ('*', 'any', 'all', 'none'):
+                        rule['field'] = field
+                        rule['op'] = op if op else '=='
+                        rule['value'] = val
+                    autoreply.append(rule)
+    elif isinstance(autoreply_in, dict):
         autoreply = {str(k): str(v) for k, v in autoreply_in.items() if str(k).strip()}
     else:
         autoreply = current.get('autoreply') or {}

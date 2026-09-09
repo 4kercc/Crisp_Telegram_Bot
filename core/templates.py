@@ -1,5 +1,6 @@
 """Crisp→Telegram 推送消息模板与自动回复匹配（getUnread 与 crispEventsHandler 共用）。"""
 import html
+import re
 import time
 
 
@@ -20,13 +21,161 @@ def format_timestamp(timestamp):
     return time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(ts))
 
 
-def match_autoreply(autoreply_config, content):
-    """关键词匹配：键支持 | 分隔多个关键词，命中任意即返回对应回复。"""
+def _can_be_number(s):
+    if s is None:
+        return False
+    s = str(s).strip()
+    return bool(re.search(r'[-+]?\d+(?:\.\d+)?', s))
+
+
+def _extract_number(val):
+    if val is None or val == '':
+        return 0.0
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip()
+    match = re.search(r'[-+]?\d+(?:\.\d+)?', s)
+    if match:
+        try:
+            return float(match.group(0))
+        except (ValueError, OverflowError):
+            pass
+    return 0.0
+
+
+def _eval_condition(field, op, val, metas):
+    """对访客元数据（如 session:data 里的 VIP、Money 或顶层 email）进行条件判断。"""
+    field = str(field or '').strip()
+    if not field or field in ('*', 'any', 'all', 'none', ''):
+        return True
+
+    metas = metas or {}
+    data = (metas.get('data') or {}) if isinstance(metas.get('data'), dict) else {}
+
+    # 优先从 data (session:data) 获取，其次顶层 metas
+    user_val = data.get(field)
+    if user_val is None:
+        user_val = metas.get(field)
+
+    op = str(op or '*').strip().lower()
+    val_str = str(val if val is not None else '').strip()
+
+    if op in ('*', '', 'none', 'always', 'any'):
+        return True
+    if op in ('exists', 'not_empty', 'set'):
+        return user_val is not None and str(user_val).strip() != ''
+    if op in ('empty', 'not_set', 'null'):
+        return user_val is None or str(user_val).strip() == ''
+    if op in ('contains', 'in'):
+        return val_str.lower() in str(user_val or '').lower()
+
+    # 数值比较
+    if op in ('>', '>=', '<', '<='):
+        u_num = _extract_number(user_val)
+        r_num = _extract_number(val_str)
+        if op == '>':
+            return u_num > r_num
+        elif op == '>=':
+            return u_num >= r_num
+        elif op == '<':
+            return u_num < r_num
+        elif op == '<=':
+            return u_num <= r_num
+
+    # 相等 / 不等
+    if op in ('==', '=', 'eq'):
+        u_str = str(user_val if user_val is not None else '').strip()
+        if u_str.lower() == val_str.lower():
+            return True
+        if _can_be_number(u_str) and _can_be_number(val_str):
+            return _extract_number(u_str) == _extract_number(val_str)
+        if (user_val is None or u_str == '') and _can_be_number(val_str) and _extract_number(val_str) == 0.0:
+            return True
+        return False
+
+    if op in ('!=', '<>', 'ne'):
+        u_str = str(user_val if user_val is not None else '').strip()
+        if _can_be_number(u_str) and _can_be_number(val_str):
+            return _extract_number(u_str) != _extract_number(val_str)
+        return u_str.lower() != val_str.lower()
+
+    return True
+
+
+def _render_reply_template(reply_text, metas):
+    """安全替换回复模板中的变量（例如 {VIP}、{email}、{Money} 等）。"""
+    if not reply_text or '{' not in reply_text:
+        return reply_text or ''
+    metas = metas or {}
+    data = (metas.get('data') or {}) if isinstance(metas.get('data'), dict) else {}
+    ctx = {}
+    for k, v in metas.items():
+        if isinstance(v, (str, int, float)):
+            ctx[k] = str(v)
+    for k, v in data.items():
+        if v is not None:
+            ctx[k] = str(v)
+
+    out = reply_text
+    for k, v in ctx.items():
+        out = out.replace('{' + k + '}', str(v))
+    return out
+
+
+def _match_keyword(pattern, content):
+    """大小写不敏感的关键词匹配，支持 | 分隔多个。"""
+    if not pattern or content is None:
+        return False
+    c_lower = str(content).lower()
+    for kw in str(pattern).split('|'):
+        kw = kw.strip()
+        if kw and kw.lower() in c_lower:
+            return True
+    return False
+
+
+def match_autoreply(autoreply_config, content, metas=None):
+    """自动回复匹配。
+
+    支持两种配置格式：
+    1. 列表规则（推荐）：
+       [
+         {"pattern": "id|苹果id", "field": "VIP", "op": ">", "value": "0", "reply": "这是私有苹果id: ..."},
+         {"pattern": "id|苹果id", "field": "VIP", "op": "==", "value": "0", "reply": "请稍等，id需要人工下发。"},
+         {"pattern": "在吗|你好", "field": "*", "op": "*", "value": "", "reply": "欢迎使用客服系统..."}
+       ]
+    2. 键值对字典（向后兼容）：
+       {"在吗|你好": "欢迎使用客服系统，请等待客服回复你~"}
+    """
+    if not autoreply_config or content is None:
+        return False, ''
+
+    # 1. 列表规则格式
+    if isinstance(autoreply_config, list):
+        for rule in autoreply_config:
+            if isinstance(rule, dict):
+                pattern = rule.get('pattern') or rule.get('keyword') or ''
+                field = rule.get('field') or ''
+                op = rule.get('op') or rule.get('operator') or '*'
+                val = rule.get('value') if rule.get('value') is not None else rule.get('val')
+                reply = rule.get('reply') or ''
+
+                if _match_keyword(pattern, content):
+                    if _eval_condition(field, op, val, metas):
+                        return True, _render_reply_template(reply, metas)
+            elif isinstance(rule, (list, tuple)) and len(rule) >= 2:
+                # [pattern, reply]
+                pattern, reply = rule[0], rule[1]
+                if _match_keyword(pattern, content):
+                    return True, _render_reply_template(reply, metas)
+        return False, ''
+
+    # 2. 传统字典格式
     if isinstance(autoreply_config, dict):
         for keys, reply in autoreply_config.items():
-            for keyword in str(keys).split('|'):
-                if keyword and keyword in str(content):
-                    return True, reply
+            if _match_keyword(keys, content):
+                return True, _render_reply_template(reply, metas)
+
     return False, ''
 
 

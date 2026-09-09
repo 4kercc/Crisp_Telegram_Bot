@@ -195,12 +195,55 @@ code { font-family: var(--mono); background: var(--bg-input); padding: 2px 6px; 
 .radio-row { display: flex; gap: 20px; padding: 4px 0; }
 .radio-row label { display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--text); }
 
-.autoreply-row { display: grid; grid-template-columns: 1fr 2fr auto; gap: 8px; margin-bottom: 8px; }
-.autoreply-row input {
-  padding: 8px 10px; background: var(--bg-input); color: var(--text);
-  border: 1px solid var(--border); border-radius: 8px; font-size: 13px;
+.autoreply-row {
+  background: var(--bg-body);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
-.autoreply-row input:focus { outline: none; border-color: var(--accent); }
+.autoreply-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.autoreply-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr;
+  gap: 8px;
+}
+.autoreply-row input, .autoreply-row select, .autoreply-row textarea {
+  padding: 8px 10px;
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+.autoreply-row select {
+  cursor: pointer;
+}
+.autoreply-row textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 52px;
+  font-family: inherit;
+  line-height: 1.4;
+}
+.autoreply-row input:focus, .autoreply-row select:focus, .autoreply-row textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.rule-tag {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
 
 button {
   padding: 9px 18px; border: 1px solid var(--border); border-radius: 8px;

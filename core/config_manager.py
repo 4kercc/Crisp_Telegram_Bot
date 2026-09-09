@@ -132,8 +132,25 @@ class ConfigManager:
                         problems.append(f'令牌池第 {i} 条缺少 ID 或 Key')
 
         autoreply = data.get('autoreply')
-        if autoreply is not None and not isinstance(autoreply, dict):
-            problems.append('自动回复必须为「关键词 → 回复内容」的键值对')
+        if autoreply is not None:
+            if not isinstance(autoreply, (dict, list)):
+                problems.append('自动回复必须为规则列表或「关键词 → 回复内容」的键值对')
+            elif isinstance(autoreply, list):
+                for i, r in enumerate(autoreply, 1):
+                    if isinstance(r, dict):
+                        pat = str(r.get('pattern') or r.get('keyword') or '').strip()
+                        rep = str(r.get('reply') or '').strip()
+                        if not pat:
+                            problems.append(f'自动回复第 {i} 条缺少匹配关键词')
+                        if not rep:
+                            problems.append(f'自动回复第 {i} 条缺少回复内容')
+                    elif isinstance(r, (list, tuple)) and len(r) >= 2:
+                        if not str(r[0] or '').strip():
+                            problems.append(f'自动回复第 {i} 条缺少匹配关键词')
+                        if not str(r[1] or '').strip():
+                            problems.append(f'自动回复第 {i} 条缺少回复内容')
+                    else:
+                        problems.append(f'自动回复第 {i} 条格式不正确')
         return problems
 
     def is_complete(self):
