@@ -161,12 +161,16 @@
           </div>
 
           <div class="card">
-            <h3>自动回复与个性化规则</h3>
-            <p class="muted">
-              命中访客关键词后自动回复。支持限定访客属性（如 <code>VIP &gt; 0</code> 或 <code>VIP == 0</code> 等），回复内容支持引用变量（如 <code>{VIP}</code>、<code>{email}</code>、<code>{Traffic}</code>）。按从上到下顺序匹配，首条命中即生效。
-            </p>
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:10px;">
+              <div>
+                <h3 style="margin-bottom:4px;">自动回复卡片规则流</h3>
+                <p class="muted" style="margin:0;">
+                  按卡片顺序从左到右、从上到下匹配。普通卡片为通用回复，高亮卡片为过滤条件分流。
+                </p>
+              </div>
+              <button id="btn-add-autoreply" type="button" class="ghost" style="padding:6px 14px; font-size:13px;">＋ 添加规则卡片</button>
+            </div>
             <div id="autoreply-rows"></div>
-            <button id="btn-add-autoreply" type="button" class="ghost">＋ 添加规则</button>
           </div>
 
           <div class="save-row">

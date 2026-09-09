@@ -388,30 +388,57 @@ function renderAutoreplyRows(rules) {
 function addAutoreplyRow(pattern = '', field = '', op = '==', val = '', reply = '') {
   const wrap = $('#autoreply-rows');
   const count = wrap.children.length + 1;
-  const row = document.createElement('div');
-  row.className = 'autoreply-row';
+  const card = document.createElement('div');
 
   const hasCond = !!(field && field !== '*' && field !== 'all' && field !== 'none');
+  card.className = 'autoreply-card ' + (hasCond ? 'card-conditional' : 'card-normal');
 
-  // 顶部栏：规则编号 + 适用范围分类下拉 + 删除按钮
+  // 1. 卡片顶部标题栏（规则编号 + 属性徽标 + 删除按钮）
   const header = document.createElement('div');
-  header.className = 'autoreply-header';
+  header.className = 'ar-card-header';
 
-  const left = document.createElement('div');
-  left.className = 'ar-header-left';
-  const tag = document.createElement('span');
-  tag.className = 'rule-tag';
-  tag.textContent = `规则 #${count}`;
+  const badge = document.createElement('span');
+  badge.className = 'ar-badge ' + (hasCond ? 'ar-badge-cond' : 'ar-badge-normal');
+  badge.textContent = hasCond ? `⚡ 条件: ${field}` : '🌐 通用';
+
+  const title = document.createElement('span');
+  title.className = 'rule-tag';
+  title.textContent = `#${count}`;
+
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'ar-del-btn';
+  del.innerHTML = '✕';
+  del.title = '删除此卡片';
+  del.addEventListener('click', () => {
+    card.remove();
+    updateRuleTags();
+  });
+
+  const hLeft = document.createElement('div');
+  hLeft.style.display = 'flex';
+  hLeft.style.alignItems = 'center';
+  hLeft.style.gap = '6px';
+  hLeft.append(title, badge);
+
+  header.append(hLeft, del);
+
+  // 2. 适用对象（分类选择）
+  const scopeGroup = document.createElement('div');
+  scopeGroup.className = 'ar-field-group';
+  const scopeLabel = document.createElement('span');
+  scopeLabel.className = 'ar-field-label';
+  scopeLabel.textContent = '适用对象';
 
   const scopeSelect = document.createElement('select');
   scopeSelect.className = 'ar-scope-select';
   const options = [
-    { val: 'all', label: '🌐 适用对象：所有人（通用回复）' },
+    { val: 'all', label: '🌐 所有人（通用）' },
     { val: 'VIP', label: '🪪 VIP 等级 (VIP)' },
     { val: 'Money', label: '💰 账户余额 (Money)' },
     { val: 'Traffic', label: '📊 剩余流量 (Traffic)' },
     { val: 'email', label: '📧 邮箱地址 (email)' },
-    { val: 'custom', label: '⚙️ 自定义属性字段…' },
+    { val: 'custom', label: '⚙️ 自定义字段…' },
   ];
 
   let matchedScope = 'all';
@@ -430,33 +457,36 @@ function addAutoreplyRow(pattern = '', field = '', op = '==', val = '', reply = 
     if (opt.val === matchedScope) el.selected = true;
     scopeSelect.appendChild(el);
   });
+  scopeGroup.append(scopeLabel, scopeSelect);
 
-  left.append(tag, scopeSelect);
-
-  const del = document.createElement('button');
-  del.type = 'button';
-  del.className = 'ghost';
-  del.textContent = '删除';
-  del.addEventListener('click', () => {
-    row.remove();
-    updateRuleTags();
-  });
-  header.append(left, del);
-
-  // 关键词输入框（整行）
+  // 3. 触发关键词输入
+  const patGroup = document.createElement('div');
+  patGroup.className = 'ar-field-group';
+  const patLabel = document.createElement('span');
+  patLabel.className = 'ar-field-label';
+  patLabel.textContent = '触发关键词';
   const pInput = document.createElement('input');
   pInput.className = 'ar-pattern';
-  pInput.placeholder = '触发关键词（支持用 | 分隔多个，如 1|教程 或 3|苹果id|id）';
+  pInput.placeholder = '如 1|教程 或 3|苹果id';
   pInput.value = pattern;
+  patGroup.append(patLabel, pInput);
 
-  // 属性条件面板（当选择具体属性分类时展开）
-  const condPanel = document.createElement('div');
-  condPanel.className = 'ar-cond-panel' + (hasCond ? '' : ' hidden');
+  // 4. 过滤条件配置栏（设置属性时展示）
+  const condWrap = document.createElement('div');
+  condWrap.className = 'ar-cond-wrap' + (hasCond ? '' : ' hidden');
+
+  const condLabel = document.createElement('span');
+  condLabel.className = 'ar-field-label';
+  condLabel.textContent = '过滤条件设置';
+
+  const condRow = document.createElement('div');
+  condRow.className = 'ar-cond-row' + (matchedScope === 'custom' ? ' custom-field' : '');
 
   const fInput = document.createElement('input');
   fInput.className = 'ar-field';
-  fInput.placeholder = '属性字段名（如 VIP）';
+  fInput.placeholder = '字段名';
   fInput.value = hasCond ? field : (matchedScope !== 'all' && matchedScope !== 'custom' ? matchedScope : '');
+  if (matchedScope !== 'custom') fInput.style.display = 'none';
 
   const opSelect = document.createElement('select');
   opSelect.className = 'ar-op';
@@ -468,7 +498,7 @@ function addAutoreplyRow(pattern = '', field = '', op = '==', val = '', reply = 
     { val: '<=', label: '<= 小于等于' },
     { val: '!=', label: '!= 不等于' },
     { val: 'contains', label: '包含' },
-    { val: 'exists', label: '存在/非空' },
+    { val: 'exists', label: '存在' },
   ].forEach((opt) => {
     const option = document.createElement('option');
     option.value = opt.val;
@@ -479,53 +509,78 @@ function addAutoreplyRow(pattern = '', field = '', op = '==', val = '', reply = 
 
   const vInput = document.createElement('input');
   vInput.className = 'ar-val';
-  vInput.placeholder = '比较值（如 0 或 VIP等级）';
+  vInput.placeholder = '比较值(如 0)';
   vInput.value = val;
 
-  condPanel.append(fInput, opSelect, vInput);
+  condRow.append(fInput, opSelect, vInput);
+  condWrap.append(condLabel, condRow);
 
-  // 切换分类下拉联动展开/收起条件面板
+  // 5. 自动回复内容
+  const repGroup = document.createElement('div');
+  repGroup.className = 'ar-field-group';
+  const repLabel = document.createElement('span');
+  repLabel.className = 'ar-field-label';
+  repLabel.textContent = '回复内容';
+  const rTextarea = document.createElement('textarea');
+  rTextarea.className = 'ar-reply';
+  rTextarea.placeholder = '回复内容，支持换行与 {VIP} 变量';
+  rTextarea.value = reply;
+  repGroup.append(repLabel, rTextarea);
+
+  // 下拉切换逻辑：动态更新卡片样式与底色
   scopeSelect.addEventListener('change', () => {
-    const val = scopeSelect.value;
-    if (val === 'all') {
-      condPanel.classList.add('hidden');
+    const selVal = scopeSelect.value;
+    if (selVal === 'all') {
+      card.className = 'autoreply-card card-normal';
+      badge.className = 'ar-badge ar-badge-normal';
+      badge.textContent = '🌐 通用';
+      condWrap.classList.add('hidden');
       fInput.value = '';
     } else {
-      condPanel.classList.remove('hidden');
-      if (val !== 'custom') {
-        fInput.value = val;
-      } else if (!fInput.value || ['VIP', 'Money', 'Traffic', 'email'].includes(fInput.value)) {
-        fInput.value = '';
-        fInput.focus();
+      card.className = 'autoreply-card card-conditional';
+      badge.className = 'ar-badge ar-badge-cond';
+      badge.textContent = `⚡ 条件: ${selVal === 'custom' ? (fInput.value || '自定义') : selVal}`;
+      condWrap.classList.remove('hidden');
+      if (selVal === 'custom') {
+        fInput.style.display = '';
+        condRow.className = 'ar-cond-row custom-field';
+        if (!fInput.value || ['VIP', 'Money', 'Traffic', 'email'].includes(fInput.value)) {
+          fInput.value = '';
+          fInput.focus();
+        }
+      } else {
+        fInput.style.display = 'none';
+        condRow.className = 'ar-cond-row';
+        fInput.value = selVal;
       }
     }
   });
 
-  // 回复文本框（在属性条件下方）
-  const rTextarea = document.createElement('textarea');
-  rTextarea.className = 'ar-reply';
-  rTextarea.placeholder = '输入自动回复内容（支持多行文本，支持变量如 {VIP}、{email}、{Money}、{Traffic} 等）';
-  rTextarea.value = reply;
+  fInput.addEventListener('input', () => {
+    if (scopeSelect.value === 'custom') {
+      badge.textContent = `⚡ 条件: ${fInput.value || '自定义'}`;
+    }
+  });
 
-  row.append(header, pInput, condPanel, rTextarea);
-  wrap.appendChild(row);
+  card.append(header, scopeGroup, patGroup, condWrap, repGroup);
+  wrap.appendChild(card);
 }
 
 function updateRuleTags() {
-  $$('#autoreply-rows .autoreply-row').forEach((row, i) => {
-    const tag = row.querySelector('.rule-tag');
-    if (tag) tag.textContent = `规则 #${i + 1}`;
+  $$('#autoreply-rows .autoreply-card').forEach((card, i) => {
+    const tag = card.querySelector('.rule-tag');
+    if (tag) tag.textContent = `#${i + 1}`;
   });
 }
 
 function collectAutoreplyRules() {
-  return Array.from($$('#autoreply-rows .autoreply-row')).map((row) => {
-    const pattern = (row.querySelector('.ar-pattern')?.value || '').trim();
-    const scope = row.querySelector('.ar-scope-select')?.value || 'all';
-    const field = scope === 'all' ? '' : (row.querySelector('.ar-field')?.value || '').trim();
-    const op = row.querySelector('.ar-op')?.value || '==';
-    const value = (row.querySelector('.ar-val')?.value || '').trim();
-    const reply = row.querySelector('.ar-reply')?.value || '';
+  return Array.from($$('#autoreply-rows .autoreply-card')).map((card) => {
+    const pattern = (card.querySelector('.ar-pattern')?.value || '').trim();
+    const scope = card.querySelector('.ar-scope-select')?.value || 'all';
+    const field = scope === 'all' ? '' : (card.querySelector('.ar-field')?.value || '').trim();
+    const op = card.querySelector('.ar-op')?.value || '==';
+    const value = (card.querySelector('.ar-val')?.value || '').trim();
+    const reply = card.querySelector('.ar-reply')?.value || '';
     const rule = { pattern, reply };
     if (field) {
       rule.field = field;

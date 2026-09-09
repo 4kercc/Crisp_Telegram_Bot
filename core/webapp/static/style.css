@@ -195,83 +195,167 @@ code { font-family: var(--mono); background: var(--bg-input); padding: 2px 6px; 
 .radio-row { display: flex; gap: 20px; padding: 4px 0; }
 .radio-row label { display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--text); }
 
-.autoreply-row {
+/* ---------- 自动回复卡片式网格布局 ---------- */
+#autoreply-rows {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
+  gap: 12px;
+  margin: 14px 0;
+}
+
+@media (min-width: 1400px) {
+  #autoreply-rows {
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  }
+}
+
+.autoreply-card {
   background: var(--bg-body);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 14px;
-  margin-bottom: 12px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  transition: border-color .2s ease;
+  gap: 8px;
+  transition: all .2s ease;
+  position: relative;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
 }
-.autoreply-row:hover {
-  border-color: rgba(79, 140, 255, 0.4);
+
+.autoreply-card:hover {
+  border-color: rgba(79, 140, 255, 0.45);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
 }
-.autoreply-header {
+
+/* 普通规则卡片 */
+.autoreply-card.card-normal {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+}
+
+/* 过滤条件规则卡片：专属高亮底色与边框区分 */
+[data-theme="dark"] .autoreply-card.card-conditional {
+  background: linear-gradient(180deg, #1b2848 0%, #151f38 100%);
+  border: 1px solid rgba(79, 140, 255, 0.5);
+  box-shadow: 0 0 12px rgba(79, 140, 255, 0.12);
+}
+
+[data-theme="light"] .autoreply-card.card-conditional {
+  background: linear-gradient(180deg, #f0f7ff 0%, #e0effe 100%);
+  border: 1px solid #93c5fd;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.08);
+}
+
+.ar-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 6px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
 }
-.ar-header-left {
-  display: flex;
+
+.ar-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
 }
-.ar-scope-select {
-  padding: 4px 10px;
-  font-size: 12.5px;
-  background: var(--bg-card);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+
+.ar-badge-normal {
+  background: rgba(139, 150, 173, 0.18);
+  color: var(--text-dim);
+}
+
+.ar-badge-cond {
+  background: rgba(79, 140, 255, 0.22);
+  color: var(--accent);
+}
+
+.ar-del-btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
   cursor: pointer;
+  padding: 2px 5px;
+  font-size: 13px;
+  border-radius: 4px;
+  line-height: 1;
 }
-.ar-pattern-wrap {
+
+.ar-del-btn:hover {
+  color: var(--red);
+  background: rgba(240, 86, 94, 0.15);
+}
+
+.ar-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ar-field-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+.autoreply-card input, .autoreply-card select, .autoreply-card textarea {
   width: 100%;
-}
-.ar-cond-panel {
-  display: grid;
-  grid-template-columns: 1.5fr 1fr 1.5fr;
-  gap: 8px;
-  background: var(--bg-card);
-  padding: 10px;
-  border-radius: 8px;
-  border: 1px dashed var(--border);
-}
-.ar-cond-panel.hidden {
-  display: none;
-}
-.autoreply-row input, .autoreply-row select, .autoreply-row textarea {
-  padding: 8px 11px;
+  padding: 6px 8px;
   background: var(--bg-input);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  font-size: 13px;
+  border-radius: 6px;
+  font-size: 12px;
   box-sizing: border-box;
 }
-.autoreply-row textarea {
-  width: 100%;
-  resize: vertical;
-  min-height: 56px;
-  font-family: inherit;
-  line-height: 1.4;
+
+.autoreply-card select {
+  cursor: pointer;
 }
-.autoreply-row input:focus, .autoreply-row select:focus, .autoreply-row textarea:focus {
+
+.autoreply-card textarea {
+  resize: vertical;
+  min-height: 52px;
+  font-family: inherit;
+  line-height: 1.35;
+}
+
+.autoreply-card input:focus, .autoreply-card select:focus, .autoreply-card textarea:focus {
   outline: none;
   border-color: var(--accent);
 }
-.rule-tag {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text);
-  background: rgba(139, 150, 173, .18);
-  padding: 2px 8px;
+
+.ar-cond-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.ar-cond-row.custom-field {
+  grid-template-columns: 1fr 0.8fr 1fr;
+}
+
+.ar-cond-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.12);
   border-radius: 6px;
+  border: 1px dashed rgba(79, 140, 255, 0.3);
+}
+
+[data-theme="light"] .ar-cond-wrap {
+  background: rgba(255, 255, 255, 0.6);
+  border-color: #bfdbfe;
+}
+
+.ar-cond-wrap.hidden {
+  display: none;
 }
 
 button {
