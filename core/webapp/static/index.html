@@ -139,6 +139,28 @@
           </div>
 
           <div class="card">
+            <h3>欢迎语与自助菜单（首次咨询自动触发）</h3>
+            <p class="muted">
+              当访客发起咨询时，若未命中特定业务规则，机器人会先自动发送一段引导欢迎菜单。每个访客在冷却周期内仅发送一次，避免重复打扰。
+            </p>
+            <div class="field">
+              <label class="checkbox">
+                <input type="checkbox" id="cfg-welcome-enabled"> 启用欢迎语引导菜单
+              </label>
+            </div>
+            <div class="field-row">
+              <label class="field">
+                <span class="field-label">冷却周期（小时，同一会话在此时间内只发一次）</span>
+                <input type="number" id="cfg-welcome-ttl" value="24" min="1" step="1">
+              </label>
+            </div>
+            <label class="field">
+              <span class="field-label">欢迎语消息内容（支持多行排版及变量插值如 {email}、{VIP} 等）</span>
+              <textarea id="cfg-welcome-message" rows="5" placeholder="你好，欢迎联系客服，下面是常用查询命令：&#10;1. 教程&#10;2. 官网&#10;3. 苹果id&#10;4. 苹果id无法更新&#10;5. 无网络&#10;&#10;请直接回复对应数字或关键词获取帮助。"></textarea>
+            </label>
+          </div>
+
+          <div class="card">
             <h3>自动回复与个性化规则</h3>
             <p class="muted">
               命中访客关键词后自动回复。支持限定访客属性（如 <code>VIP &gt; 0</code> 或 <code>VIP == 0</code> 等），回复内容支持引用变量（如 <code>{VIP}</code>、<code>{email}</code>、<code>{Traffic}</code>）。按从上到下顺序匹配，首条命中即生效。

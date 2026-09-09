@@ -122,6 +122,25 @@ def _render_reply_template(reply_text, metas):
     return out
 
 
+def render_welcome_message(welcome_config, metas=None):
+    """渲染欢迎语内容（支持变量替换）。"""
+    if not welcome_config:
+        return ''
+    if isinstance(welcome_config, dict):
+        text = str(welcome_config.get('message') or '').strip()
+    else:
+        text = str(welcome_config).strip()
+    return _render_reply_template(text, metas) if text else ''
+
+
+def is_welcome_enabled(welcome_config):
+    if not welcome_config:
+        return False
+    if isinstance(welcome_config, dict):
+        return bool(welcome_config.get('enabled', True)) and bool(str(welcome_config.get('message') or '').strip())
+    return bool(str(welcome_config).strip())
+
+
 def _match_keyword(pattern, content):
     """大小写不敏感的关键词匹配，支持 | 分隔多个。"""
     if not pattern or content is None:

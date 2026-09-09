@@ -132,6 +132,11 @@ def get_config():
             'key_set': bool(crisp_cfg.get('key')),
             'tokens': tokens,
         },
+        'welcome': config.get('welcome') or {
+            'enabled': False,
+            'ttl_hours': 24,
+            'message': '',
+        },
         'autoreply': config.get('autoreply') or {},
     })
 
@@ -211,7 +216,17 @@ def save_config():
     else:
         autoreply = current.get('autoreply') or {}
 
-    merged = {'bot': bot, 'crisp': crisp, 'autoreply': autoreply}
+    welcome_in = body.get('welcome')
+    if isinstance(welcome_in, dict):
+        welcome = {
+            'enabled': bool(welcome_in.get('enabled')),
+            'ttl_hours': float(welcome_in.get('ttl_hours') or 24),
+            'message': str(welcome_in.get('message') or '').strip(),
+        }
+    else:
+        welcome = current.get('welcome') or {}
+
+    merged = {'bot': bot, 'crisp': crisp, 'welcome': welcome, 'autoreply': autoreply}
     try:
         cm.save(merged)
     except ConfigError as err:

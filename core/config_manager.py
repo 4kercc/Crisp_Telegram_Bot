@@ -7,6 +7,11 @@ import yaml
 from werkzeug.security import check_password_hash, generate_password_hash
 
 DEFAULT_AUTOREPLY = {'在吗|你好': '欢迎使用客服系统，请等待客服回复你~'}
+DEFAULT_WELCOME = {
+    'enabled': False,
+    'ttl_hours': 24,
+    'message': '你好，欢迎联系客服，下面是常用查询命令：\n1. 教程\n2. 官网\n3. 苹果id\n4. 苹果id无法更新\n5. 无网络\n\n请直接回复对应数字或关键词获取帮助。',
+}
 
 # 这些字段在 API 返回时脱敏；提交时留空表示保持原值
 SECRET_FIELDS = (('bot', 'token'), ('crisp', 'key'))
@@ -23,6 +28,7 @@ def default_config():
         'bot': {'token': '', 'admin_id': [], 'proxy': ''},
         'crisp': {'id': '', 'key': '', 'website': '', 'msgapi': 'rtm', 'poll_interval': 60,
                   'tokens': []},
+        'welcome': dict(DEFAULT_WELCOME),
         'autoreply': dict(DEFAULT_AUTOREPLY),
         'console': {},
     }
@@ -30,7 +36,7 @@ def default_config():
 
 def _merge_defaults(data):
     merged = default_config()
-    for section in ('bot', 'crisp', 'autoreply', 'console'):
+    for section in ('bot', 'crisp', 'welcome', 'autoreply', 'console'):
         value = data.get(section)
         if isinstance(value, dict):
             merged[section].update(value)
@@ -83,6 +89,7 @@ class ConfigManager:
             raw = self._read_raw()
             raw['bot'] = data.get('bot') or {}
             raw['crisp'] = data.get('crisp') or {}
+            raw['welcome'] = data.get('welcome') or {}
             raw['autoreply'] = data.get('autoreply') or {}
             self._write_raw(raw)
 

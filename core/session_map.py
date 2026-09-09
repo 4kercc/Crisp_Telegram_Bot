@@ -43,3 +43,37 @@ def record_email(session_id, email):
 def lookup_email(session_id):
     with _lock:
         return _email_map.get(session_id)
+
+
+# ---------- 会话首次欢迎语追踪（支持按小时冷却与防重复打扰） ----------
+
+CAPACITY_WELCOME = 5000
+_welcome_map = OrderedDict()  # session_id -> timestamp (float)
+
+
+def is_welcome_needed(session_id, ttl_hours=24):
+    """检查指定会话是否需要发送欢迎语（若在 ttl_hours 内已发送过则返回 False）。"""
+    if not session_id:
+        return False
+    import time
+    now = time.time()
+    ttl_seconds = max(0.1, float(ttl_hours or 24)) * 3600.0
+    with _lock:
+        last_time = _welcome_map.get(session_id)
+        if last_time is None or (now - last_time) >= ttl_seconds:
+            return True
+        return False
+
+
+def mark_welcomed(session_id):
+    """标记会话已发送欢迎语（记录当前时间戳）。"""
+    if not session_id:
+        return
+    import time
+    now = time.time()
+    with _lock:
+        _welcome_map[session_id] = now
+        _welcome_map.move_to_end(session_id)
+        while len(_welcome_map) > CAPACITY_WELCOME:
+            _welcome_map.popitem(last=False)
+

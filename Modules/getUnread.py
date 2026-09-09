@@ -4,7 +4,8 @@ import logging
 from core import session_map
 from core.logbus import bus
 from core.runtime import runtime
-from core.templates import build_push_text, match_autoreply
+from core.templates import (build_push_text, is_welcome_enabled,
+                            match_autoreply, render_welcome_message)
 
 log = logging.getLogger('mod.getUnread')
 
@@ -63,20 +64,33 @@ async def _push_text(context, client, config, website_id, session_id, metas, mes
     # 通过消息指纹将消息置为已读
     mark_read(client, website_id, session_id, message['fingerprint'])
 
+    welcome_cfg = config.get('welcome') or {}
+    ttl_hours = welcome_cfg.get('ttl_hours', 24)
+    welcome_active = is_welcome_enabled(welcome_cfg) and session_map.is_welcome_needed(session_id, ttl_hours)
+
     matched, autoreply = match_autoreply(config.get('autoreply'), message['content'], metas=metas)
+
+    reply_to_send = ''
+    if matched:
+        reply_to_send = autoreply
+        session_map.mark_welcomed(session_id)
+    elif welcome_active:
+        reply_to_send = render_welcome_message(welcome_cfg, metas=metas)
+        session_map.mark_welcomed(session_id)
+
     text = build_push_text(metas, message['content'],
-                           autoreply=autoreply if matched else '',
+                           autoreply=reply_to_send,
                            timestamp=message.get('timestamp'))
 
-    if matched:
+    if reply_to_send:
         client.website.send_message_in_conversation(website_id, session_id, {
             'type': 'text',
-            'content': autoreply,
+            'content': reply_to_send,
             'from': 'operator',
             'origin': 'chat',
         })
-        bus.event('autoreply', autoreply, session_id=session_id, email=metas.get('email'))
-        log.info('会话 %s 命中自动回复', session_id)
+        bus.event('autoreply', reply_to_send, session_id=session_id, email=metas.get('email'))
+        log.info('会话 %s 触发自动回复/欢迎语', session_id)
 
     for admin_id in config['bot']['admin_id']:
         sent = await context.bot.send_message(chat_id=admin_id, text=text, parse_mode='HTML')

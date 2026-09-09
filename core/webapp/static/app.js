@@ -279,6 +279,11 @@ function fillConfigForm(cfg) {
   $('#cfg-poll-interval').value = cfg.crisp.poll_interval || 60;
   updatePollIntervalVisibility();
 
+  const welcome = cfg.welcome || {};
+  $('#cfg-welcome-enabled').checked = !!welcome.enabled;
+  $('#cfg-welcome-ttl').value = welcome.ttl_hours || 24;
+  $('#cfg-welcome-message').value = welcome.message || '';
+
   renderAutoreplyRows(cfg.autoreply || {});
 }
 
@@ -492,6 +497,11 @@ async function saveConfig() {
       msgapi: document.querySelector('input[name="cfg-msgapi"]:checked').value,
       poll_interval: parseInt($('#cfg-poll-interval').value, 10) || 60,
       tokens: collectTokenPool(),
+    },
+    welcome: {
+      enabled: $('#cfg-welcome-enabled').checked,
+      ttl_hours: parseFloat($('#cfg-welcome-ttl').value) || 24,
+      message: $('#cfg-welcome-message').value.trim(),
     },
     autoreply,
   };

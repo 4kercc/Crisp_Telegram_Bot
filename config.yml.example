@@ -15,6 +15,23 @@ crisp:
   website:
   msgapi: rtm          # rtm = WebSocket 实时推送；rest = 定时轮询
   poll_interval: 60    # msgapi 为 rest 时的轮询间隔（秒）
+welcome:
+  enabled: true
+  ttl_hours: 24
+  message: "你好，欢迎联系客服，下面是常用查询命令：\n1. 教程\n2. 官网\n3. 苹果id\n4. 苹果id无法更新\n5. 无网络\n\n请直接回复对应数字或关键词获取帮助。"
 autoreply:
-  '在吗|你好' : '欢迎使用客服系统，请等待客服回复你~'
+  - pattern: "1|教程"
+    reply: "请查阅官网使用教程"
+  - pattern: "2|官网"
+    reply: "官网地址为：https://example.com"
+  - pattern: "3|苹果id"
+    field: "VIP"
+    op: ">"
+    value: "0"
+    reply: "这是私有苹果id: https://aunlock.laomaos.com/share/HzUFBCWShs 密码wukong"
+  - pattern: "3|苹果id"
+    field: "VIP"
+    op: "=="
+    value: "0"
+    reply: "请稍等，私有苹果 ID 需要人工核验后下发~"
 # console 段由程序自动维护（控制台密码哈希、session 密钥），请勿手动编辑
