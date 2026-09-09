@@ -391,12 +391,48 @@ function addAutoreplyRow(pattern = '', field = '', op = '==', val = '', reply = 
   const row = document.createElement('div');
   row.className = 'autoreply-row';
 
-  // 顶部标题与删除按钮
+  const hasCond = !!(field && field !== '*' && field !== 'all' && field !== 'none');
+
+  // 顶部栏：规则编号 + 适用范围分类下拉 + 删除按钮
   const header = document.createElement('div');
   header.className = 'autoreply-header';
+
+  const left = document.createElement('div');
+  left.className = 'ar-header-left';
   const tag = document.createElement('span');
   tag.className = 'rule-tag';
   tag.textContent = `规则 #${count}`;
+
+  const scopeSelect = document.createElement('select');
+  scopeSelect.className = 'ar-scope-select';
+  const options = [
+    { val: 'all', label: '🌐 适用对象：所有人（通用回复）' },
+    { val: 'VIP', label: '🪪 VIP 等级 (VIP)' },
+    { val: 'Money', label: '💰 账户余额 (Money)' },
+    { val: 'Traffic', label: '📊 剩余流量 (Traffic)' },
+    { val: 'email', label: '📧 邮箱地址 (email)' },
+    { val: 'custom', label: '⚙️ 自定义属性字段…' },
+  ];
+
+  let matchedScope = 'all';
+  if (hasCond) {
+    if (['VIP', 'Money', 'Traffic', 'email'].includes(field)) {
+      matchedScope = field;
+    } else {
+      matchedScope = 'custom';
+    }
+  }
+
+  options.forEach((opt) => {
+    const el = document.createElement('option');
+    el.value = opt.val;
+    el.textContent = opt.label;
+    if (opt.val === matchedScope) el.selected = true;
+    scopeSelect.appendChild(el);
+  });
+
+  left.append(tag, scopeSelect);
+
   const del = document.createElement('button');
   del.type = 'button';
   del.className = 'ghost';
@@ -405,21 +441,22 @@ function addAutoreplyRow(pattern = '', field = '', op = '==', val = '', reply = 
     row.remove();
     updateRuleTags();
   });
-  header.append(tag, del);
+  header.append(left, del);
 
-  // 条件网格（关键词、字段、运算符、比较值）
-  const grid = document.createElement('div');
-  grid.className = 'autoreply-grid';
-
+  // 关键词输入框（整行）
   const pInput = document.createElement('input');
   pInput.className = 'ar-pattern';
-  pInput.placeholder = '触发关键词（支持 | 分隔多个，如 id|苹果id）';
+  pInput.placeholder = '触发关键词（支持用 | 分隔多个，如 1|教程 或 3|苹果id|id）';
   pInput.value = pattern;
+
+  // 属性条件面板（当选择具体属性分类时展开）
+  const condPanel = document.createElement('div');
+  condPanel.className = 'ar-cond-panel' + (hasCond ? '' : ' hidden');
 
   const fInput = document.createElement('input');
   fInput.className = 'ar-field';
-  fInput.placeholder = '属性字段（如 VIP/Money/email，留空=无限定）';
-  fInput.value = field;
+  fInput.placeholder = '属性字段名（如 VIP）';
+  fInput.value = hasCond ? field : (matchedScope !== 'all' && matchedScope !== 'custom' ? matchedScope : '');
 
   const opSelect = document.createElement('select');
   opSelect.className = 'ar-op';
@@ -445,15 +482,32 @@ function addAutoreplyRow(pattern = '', field = '', op = '==', val = '', reply = 
   vInput.placeholder = '比较值（如 0 或 VIP等级）';
   vInput.value = val;
 
-  grid.append(pInput, fInput, opSelect, vInput);
+  condPanel.append(fInput, opSelect, vInput);
 
-  // 回复文本框（支持多行与插值变量）
+  // 切换分类下拉联动展开/收起条件面板
+  scopeSelect.addEventListener('change', () => {
+    const val = scopeSelect.value;
+    if (val === 'all') {
+      condPanel.classList.add('hidden');
+      fInput.value = '';
+    } else {
+      condPanel.classList.remove('hidden');
+      if (val !== 'custom') {
+        fInput.value = val;
+      } else if (!fInput.value || ['VIP', 'Money', 'Traffic', 'email'].includes(fInput.value)) {
+        fInput.value = '';
+        fInput.focus();
+      }
+    }
+  });
+
+  // 回复文本框（在属性条件下方）
   const rTextarea = document.createElement('textarea');
   rTextarea.className = 'ar-reply';
-  rTextarea.placeholder = '自动回复内容（支持多行文本，支持变量如 {VIP}、{email}、{Money}、{Traffic} 等）';
+  rTextarea.placeholder = '输入自动回复内容（支持多行文本，支持变量如 {VIP}、{email}、{Money}、{Traffic} 等）';
   rTextarea.value = reply;
 
-  row.append(header, grid, rTextarea);
+  row.append(header, pInput, condPanel, rTextarea);
   wrap.appendChild(row);
 }
 
@@ -467,7 +521,8 @@ function updateRuleTags() {
 function collectAutoreplyRules() {
   return Array.from($$('#autoreply-rows .autoreply-row')).map((row) => {
     const pattern = (row.querySelector('.ar-pattern')?.value || '').trim();
-    const field = (row.querySelector('.ar-field')?.value || '').trim();
+    const scope = row.querySelector('.ar-scope-select')?.value || 'all';
+    const field = scope === 'all' ? '' : (row.querySelector('.ar-field')?.value || '').trim();
     const op = row.querySelector('.ar-op')?.value || '==';
     const value = (row.querySelector('.ar-val')?.value || '').trim();
     const reply = row.querySelector('.ar-reply')?.value || '';

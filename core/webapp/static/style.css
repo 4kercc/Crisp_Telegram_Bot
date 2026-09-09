@@ -199,25 +199,54 @@ code { font-family: var(--mono); background: var(--bg-input); padding: 2px 6px; 
   background: var(--bg-body);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 12px;
+  padding: 14px;
   margin-bottom: 12px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  transition: border-color .2s ease;
+}
+.autoreply-row:hover {
+  border-color: rgba(79, 140, 255, 0.4);
 }
 .autoreply-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 12px;
 }
-.autoreply-grid {
+.ar-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.ar-scope-select {
+  padding: 4px 10px;
+  font-size: 12.5px;
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.ar-pattern-wrap {
+  width: 100%;
+}
+.ar-cond-panel {
   display: grid;
-  grid-template-columns: 2fr 1fr 1fr 1fr;
+  grid-template-columns: 1.5fr 1fr 1.5fr;
   gap: 8px;
+  background: var(--bg-card);
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px dashed var(--border);
+}
+.ar-cond-panel.hidden {
+  display: none;
 }
 .autoreply-row input, .autoreply-row select, .autoreply-row textarea {
-  padding: 8px 10px;
+  padding: 8px 11px;
   background: var(--bg-input);
   color: var(--text);
   border: 1px solid var(--border);
@@ -225,13 +254,10 @@ code { font-family: var(--mono); background: var(--bg-input); padding: 2px 6px; 
   font-size: 13px;
   box-sizing: border-box;
 }
-.autoreply-row select {
-  cursor: pointer;
-}
 .autoreply-row textarea {
   width: 100%;
   resize: vertical;
-  min-height: 52px;
+  min-height: 56px;
   font-family: inherit;
   line-height: 1.4;
 }
@@ -240,9 +266,12 @@ code { font-family: var(--mono); background: var(--bg-input); padding: 2px 6px; 
   border-color: var(--accent);
 }
 .rule-tag {
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
-  color: var(--text-dim);
+  color: var(--text);
+  background: rgba(139, 150, 173, .18);
+  padding: 2px 8px;
+  border-radius: 6px;
 }
 
 button {
