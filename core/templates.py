@@ -198,18 +198,29 @@ def match_autoreply(autoreply_config, content, metas=None):
     return False, ''
 
 
-def _profile_lines(data):
-    """把 Crisp session:data 里的用户资料渲染成卡片行（有则显示，无则跳过）。
+def _profile_lines(data, metas=None):
+    """把 Crisp session:data 里的用户资料与 metas 渲染成卡片行（有则显示，无则跳过）。
 
     兼容两套键名：
       SSPanel 主题推送：VIP / Used / Traffic / VIP_Time / Reg_Time / Money
       v2board 脚本推送：Plan / UsedTraffic / AllTraffic
     """
     lines = []
+    data = data or {}
+    metas = metas or {}
+
+    # 用户名 / 昵称
+    nickname = metas.get('nickname') or data.get('Username') or data.get('user_name') or data.get('nickname') or ''
 
     profile = []
     if data.get('VIP') not in (None, ''):
-        profile.append(f'🪪<b>VIP等级</b>：{escape(data["VIP"])}')
+        vip_text = f'🪪<b>VIP等级</b>：{escape(data["VIP"])}'
+        if nickname:
+            vip_text += f'（{escape(nickname)}）'
+        profile.append(vip_text)
+    elif nickname:
+        profile.append(f'👤<b>用户名称</b>：{escape(nickname)}')
+
     if data.get('Money'):
         profile.append(f'💰<b>账户余额</b>：{escape(data["Money"])}')
     if profile:
@@ -244,7 +255,10 @@ def build_push_text(metas, content, autoreply='', image_only=False, timestamp=No
         lines.append(f'📧<b>电子邮箱</b>：{escape(email)}')
     data = metas.get('data') or {}
     if isinstance(data, dict):
-        lines.extend(_profile_lines(data))
+        lines.extend(_profile_lines(data, metas=metas))
+    elif metas.get('nickname'):
+        lines.append(f'👤<b>用户名称</b>：{escape(metas.get("nickname"))}')
+
     message_time = format_timestamp(timestamp)
     if message_time:
         lines.append(f'🕒<b>发送时间</b>：{message_time}')
