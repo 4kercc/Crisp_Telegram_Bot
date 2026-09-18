@@ -2,6 +2,7 @@
 支持从 Web 控制台随时启动/停止/重启（热应用新配置），控制台进程本身不退出。"""
 import asyncio
 import logging
+import os
 import re
 import threading
 import time
@@ -73,7 +74,9 @@ class BotEngine:
 
         from core.token_pool import TokenPool, install_request_hook
         from core import runtime
-        pool = TokenPool(entries)
+        cfg_dir = os.path.dirname(os.path.abspath(self.config_manager.path)) if self.config_manager else None
+        state_file = os.path.join(cfg_dir, '.tokens_state.json') if cfg_dir else None
+        pool = TokenPool(entries, state_file=state_file)
         runtime.token_pool = pool
         install_request_hook(pool)
 

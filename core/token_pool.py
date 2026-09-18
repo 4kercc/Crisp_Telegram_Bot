@@ -3,8 +3,11 @@
 原理：Crisp 官方未提供配额查询接口，这里在 crisp_api 的 HTTP 层挂钩——
 每次 REST 请求按当前令牌计数；用量逼近限额或收到 429 时，自动切换到
 用量最少且未耗尽的令牌并重新 authenticate，对上层模块完全透明。
+支持本地持久化记录用量与 24 小时过期重置，防止服务重启后计数归零。
 """
+import json
 import logging
+import os
 import threading
 import time
 
@@ -18,26 +21,95 @@ EXHAUSTED_HOURS = 24
 
 
 class TokenInfo:
-    def __init__(self, identifier, key):
+    def __init__(self, identifier, key, used=0, exhausted_until=0.0, last_updated=0.0):
         self.identifier = identifier
         self.key = key
-        self.used = 0
-        self.exhausted_until = 0.0
+        self.used = int(used or 0)
+        self.exhausted_until = float(exhausted_until or 0.0)
+        self.last_updated = float(last_updated or time.time())
         self.last_error = None
 
+    def check_daily_reset(self):
+        """如果距离上次使用超过 24 小时，且未处于 429 冻结期，则自动重置本地用量。"""
+        now = time.time()
+        if now >= self.exhausted_until and (now - self.last_updated) >= EXHAUSTED_HOURS * 3600:
+            if self.used > 0:
+                log.info('令牌 %s… 距离上次使用已满 24 小时，自动重置用量 (原: %d)',
+                         self.identifier[:8], self.used)
+                self.used = 0
+                self.exhausted_until = 0.0
+                self.last_updated = now
+
     def exhausted(self):
+        self.check_daily_reset()
         return time.time() < self.exhausted_until
 
 
 class TokenPool:
-    def __init__(self, tokens, limit=DEFAULT_LIMIT, threshold=DEFAULT_THRESHOLD):
+    def __init__(self, tokens, limit=DEFAULT_LIMIT, threshold=DEFAULT_THRESHOLD, state_file=None):
         self._lock = threading.RLock()
-        self._tokens = [TokenInfo(i, k) for i, k in tokens]
-        self._index = 0
+        self.state_file = state_file
         self.limit = int(limit) or DEFAULT_LIMIT
         self.threshold = max(0, int(threshold) if threshold is not None else DEFAULT_THRESHOLD)
         self._client = None
         self._last_no_candidate_warn = 0.0
+
+        # 从持久化文件读取已保存的用量状态
+        saved_state = self._load_state()
+
+        self._tokens = []
+        now = time.time()
+        for i, k in tokens:
+            st = saved_state.get(i) or {}
+            used = st.get('used', 0)
+            ex_until = st.get('exhausted_until', 0.0)
+            last_up = st.get('last_updated', now)
+            t_info = TokenInfo(i, k, used=used, exhausted_until=ex_until, last_updated=last_up)
+            t_info.check_daily_reset()
+            self._tokens.append(t_info)
+
+        # 优先选择用量最少且未耗尽的令牌作为起始
+        if self._tokens:
+            avail = [t for t in self._tokens if not t.exhausted()]
+            if avail:
+                best = min(avail, key=lambda t: t.used)
+                self._index = self._tokens.index(best)
+            else:
+                self._index = 0
+        else:
+            self._index = 0
+
+    def _load_state(self):
+        if not self.state_file or not os.path.exists(self.state_file):
+            return {}
+        try:
+            with open(self.state_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
+        except Exception as err:
+            log.warning('读取令牌用量持久化文件失败：%s', err)
+            return {}
+
+    def _save_state(self):
+        if not self.state_file:
+            return
+        try:
+            state = {}
+            for t in self._tokens:
+                state[t.identifier] = {
+                    'used': t.used,
+                    'exhausted_until': t.exhausted_until,
+                    'last_updated': t.last_updated,
+                }
+            tmp = self.state_file + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(state, f, indent=2)
+            if os.path.exists(self.state_file):
+                os.replace(tmp, self.state_file)
+            else:
+                os.rename(tmp, self.state_file)
+        except Exception as err:
+            log.warning('保存令牌用量持久化文件失败：%s', err)
 
     def bind_client(self, client):
         """令牌切换时自动对 Crisp 客户端重新 authenticate。"""
@@ -51,10 +123,13 @@ class TokenPool:
         """每次 REST 请求调用：计数并在逼近限额时提前切换。"""
         with self._lock:
             token = self._tokens[self._index]
+            token.check_daily_reset()
             token.used += 1
+            token.last_updated = time.time()
             if token.used >= self.limit:
                 token.exhausted_until = max(token.exhausted_until,
                                              time.time() + EXHAUSTED_HOURS * 3600)
+            self._save_state()
             if token.used >= self.limit - self.threshold:
                 self._rotate(f'令牌 {token.identifier[:8]}… 用量已达 {token.used}/{self.limit}（切换阈值 {self.threshold}）')
 
@@ -63,7 +138,9 @@ class TokenPool:
         with self._lock:
             token = self._tokens[self._index]
             token.exhausted_until = time.time() + EXHAUSTED_HOURS * 3600
+            token.last_updated = time.time()
             token.last_error = '触发 Crisp 限流(429)'
+            self._save_state()
             self._rotate(f'令牌 {token.identifier[:8]}… 触发限流(429)，{EXHAUSTED_HOURS} 小时后恢复')
 
     def update_usage(self, used, limit=None, reset_seconds=None):
@@ -74,11 +151,13 @@ class TokenPool:
                 self.limit = int(limit)
             if used is not None:
                 token.used = max(token.used, int(used))
+            token.last_updated = time.time()
             if reset_seconds:
                 token.exhausted_until = max(token.exhausted_until, time.time() + int(reset_seconds))
             if token.used >= self.limit:
                 token.exhausted_until = max(token.exhausted_until,
                                              time.time() + EXHAUSTED_HOURS * 3600)
+            self._save_state()
             if token.used >= self.limit - self.threshold:
                 self._rotate(f'令牌 {token.identifier[:8]}… 服务端用量 {token.used}/{self.limit}')
 
@@ -87,7 +166,7 @@ class TokenPool:
         candidates = [t for t in self._tokens
                       if t is not self._tokens[self._index] and not t.exhausted()]
         if not candidates:
-            # 告警去抖：半小时最多提示一次，避免每次请求刷日志
+            # 告警去抖：半小���最多提示一次，避免每次请求刷日志
             if now - self._last_no_candidate_warn > 1800:
                 self._last_no_candidate_warn = now
                 log.warning('令牌池内没有其他可用令牌：%s', reason)
@@ -108,6 +187,8 @@ class TokenPool:
     def snapshot(self):
         with self._lock:
             now = time.time()
+            for t in self._tokens:
+                t.check_daily_reset()
             return {
                 'limit': self.limit,
                 'threshold': self.threshold,
