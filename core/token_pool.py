@@ -1,4 +1,4 @@
-"""Crisp 插件令牌池：多枚开发令牌自动轮换，规避 500 次/24h 限额。
+"""Crisp 插件令牌池：多枚开发令牌自动轮换，规避 400 次/24h 限额（预留缓冲）。
 
 原理：Crisp 官方未提供配额查询接口，这里在 crisp_api 的 HTTP 层挂钩——
 每次 REST 请求按当前令牌计数；用量逼近限额或收到 429 时，自动切换到
@@ -15,7 +15,7 @@ from core.logbus import bus
 
 log = logging.getLogger('token_pool')
 
-DEFAULT_LIMIT = 500
+DEFAULT_LIMIT = 400
 DEFAULT_THRESHOLD = 20
 EXHAUSTED_HOURS = 24
 

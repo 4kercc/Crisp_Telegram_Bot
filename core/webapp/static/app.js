@@ -328,7 +328,7 @@ function renderTokenUsage(tokens, current, limit) {
   }
   wrap.innerHTML = '';
   tokens.forEach((t, i) => {
-    const pct = Math.min(100, Math.round((t.used / (limit || 500)) * 100));
+    const pct = Math.min(100, Math.round((t.used / (limit || 400)) * 100));
     const row = document.createElement('div');
     row.className = 'token-usage-row';
     const head = document.createElement('div');
