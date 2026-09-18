@@ -275,6 +275,9 @@ function fillConfigForm(cfg) {
 
   renderTokenPoolRows(cfg.crisp.tokens || []);
 
+  const rotVal = cfg.crisp.rotation || 'round_robin';
+  $$('input[name="cfg-token-rotation"]').forEach((el) => { el.checked = el.value === rotVal; });
+
   $$('input[name="cfg-msgapi"]').forEach((el) => { el.checked = el.value === cfg.crisp.msgapi; });
   $('#cfg-poll-interval').value = cfg.crisp.poll_interval || 60;
   updatePollIntervalVisibility();
@@ -606,6 +609,7 @@ async function saveConfig() {
       website: $('#cfg-crisp-website').value.trim(),
       msgapi: document.querySelector('input[name="cfg-msgapi"]:checked').value,
       poll_interval: parseInt($('#cfg-poll-interval').value, 10) || 60,
+      rotation: document.querySelector('input[name="cfg-token-rotation"]:checked')?.value || 'round_robin',
       tokens: collectTokenPool(),
     },
     welcome: {

@@ -76,7 +76,8 @@ class BotEngine:
         from core import runtime
         cfg_dir = os.path.dirname(os.path.abspath(self.config_manager.path)) if self.config_manager else None
         state_file = os.path.join(cfg_dir, '.tokens_state.json') if cfg_dir else None
-        pool = TokenPool(entries, state_file=state_file)
+        rotation = crisp_cfg.get('rotation') or 'round_robin'
+        pool = TokenPool(entries, rotation=rotation, state_file=state_file)
         runtime.token_pool = pool
         install_request_hook(pool)
 

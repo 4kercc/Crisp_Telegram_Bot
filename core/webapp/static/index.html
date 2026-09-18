@@ -126,6 +126,14 @@
               <span class="field-hint">每枚令牌对应一个 Marketplace 插件的 Identifier + Key；Key 留空表示保持原值</span>
             </div>
             <div class="field">
+              <span class="field-label">令牌池调度模式</span>
+              <div class="radio-row">
+                <label><input type="radio" name="cfg-token-rotation" value="round_robin" checked> 顺序轮询（每次请求轮流使用各令牌，均匀分摊配额）</label>
+                <label><input type="radio" name="cfg-token-rotation" value="failover"> 主备切换（优先用首选令牌，达 380 次或限流时切换备用）</label>
+              </div>
+              <span class="field-hint">无论哪种模式，单枚令牌达到 380 次时均会自动冻结保护 24 小时并跳过</span>
+            </div>
+            <div class="field">
               <span class="field-label">消息接收模式</span>
               <div class="radio-row">
                 <label><input type="radio" name="cfg-msgapi" value="rtm" checked> RTM（WebSocket 实时推送，推荐）</label>

@@ -46,11 +46,13 @@ class TokenInfo:
 
 
 class TokenPool:
-    def __init__(self, tokens, limit=DEFAULT_LIMIT, threshold=DEFAULT_THRESHOLD, state_file=None):
+    def __init__(self, tokens, limit=DEFAULT_LIMIT, threshold=DEFAULT_THRESHOLD,
+                 rotation='round_robin', state_file=None):
         self._lock = threading.RLock()
         self.state_file = state_file
         self.limit = int(limit) or DEFAULT_LIMIT
         self.threshold = max(0, int(threshold) if threshold is not None else DEFAULT_THRESHOLD)
+        self.rotation = str(rotation or 'round_robin').strip().lower()
         self._client = None
         self._last_no_candidate_warn = 0.0
 
@@ -119,19 +121,58 @@ class TokenPool:
         with self._lock:
             return self._tokens[self._index]
 
+    def _select_next_token(self):
+        """根据轮换策略选出下一个目标令牌：
+        - round_robin (轮询): 每次请求顺次轮转到下一个未耗尽令牌，多个令牌均匀分摊请求
+        - failover (主备故障转移): 固定使用当前令牌，直到达到 380 次熔断或收到 429 后再切换
+        """
+        if len(self._tokens) <= 1:
+            return
+
+        now = time.time()
+        # 排除已耗尽(380次或429)的令牌
+        avail_indices = [idx for idx, t in enumerate(self._tokens) if not t.exhausted()]
+        if not avail_indices:
+            return
+
+        if self.rotation == 'round_robin':
+            # 找到下一个可用索引
+            for step in range(1, len(self._tokens) + 1):
+                next_idx = (self._index + step) % len(self._tokens)
+                if next_idx in avail_indices:
+                    if next_idx != self._index:
+                        self._index = next_idx
+                        if self._client is not None:
+                            try:
+                                t = self._tokens[self._index]
+                                self._client.authenticate(t.identifier, t.key)
+                            except Exception as err:
+                                log.error('轮询切换令牌认证失败：%s', err)
+                    break
+
     def on_request(self):
-        """每次 REST 请求调用：计数并在逼近限额时提前切换。"""
+        """每次 REST 请求调用：计数并在达到阈值或轮询模式下切换。"""
         with self._lock:
             token = self._tokens[self._index]
             token.check_daily_reset()
             token.used += 1
             token.last_updated = time.time()
-            if token.used >= self.limit:
-                token.exhausted_until = max(token.exhausted_until,
-                                             time.time() + EXHAUSTED_HOURS * 3600)
+
+            # 达到或超过 380 次（limit - threshold）自动标记耗尽 24 小时
+            if token.used >= (self.limit - self.threshold):
+                if token.exhausted_until <= time.time():
+                    token.exhausted_until = time.time() + EXHAUSTED_HOURS * 3600
+                    log.warning('令牌 %s… 用量已达 %d/%d，触发安全保护禁用 24 小时',
+                                token.identifier[:8], token.used, self.limit)
+
             self._save_state()
-            if token.used >= self.limit - self.threshold:
-                self._rotate(f'令牌 {token.identifier[:8]}… 用量已达 {token.used}/{self.limit}（切换阈值 {self.threshold}）')
+
+            # 当前令牌已达上限，强制熔断切换
+            if token.used >= (self.limit - self.threshold):
+                self._rotate(f'令牌 {token.identifier[:8]}… 用量已达 {token.used}/{self.limit}（已达安全阈值 {self.limit - self.threshold}）')
+            elif self.rotation == 'round_robin':
+                # 轮询模式：请求完成后顺延至下一个令牌，准备下一次请求
+                self._select_next_token()
 
     def on_rate_limited(self):
         """收到 429：标记当前令牌 24 小时后恢复并切换。"""
@@ -154,7 +195,7 @@ class TokenPool:
             token.last_updated = time.time()
             if reset_seconds:
                 token.exhausted_until = max(token.exhausted_until, time.time() + int(reset_seconds))
-            if token.used >= self.limit:
+            if token.used >= self.limit - self.threshold:
                 token.exhausted_until = max(token.exhausted_until,
                                              time.time() + EXHAUSTED_HOURS * 3600)
             self._save_state()
@@ -166,7 +207,7 @@ class TokenPool:
         candidates = [t for t in self._tokens
                       if t is not self._tokens[self._index] and not t.exhausted()]
         if not candidates:
-            # 告警去抖：半小���最多提示一次，避免每次请求刷日志
+            # 告警去抖：半小时最多提示一次，避免每次请求刷日志
             if now - self._last_no_candidate_warn > 1800:
                 self._last_no_candidate_warn = now
                 log.warning('令牌池内没有其他可用令牌：%s', reason)
@@ -192,6 +233,7 @@ class TokenPool:
             return {
                 'limit': self.limit,
                 'threshold': self.threshold,
+                'rotation': self.rotation,
                 'current': self._index,
                 'tokens': [{
                     'identifier': t.identifier,

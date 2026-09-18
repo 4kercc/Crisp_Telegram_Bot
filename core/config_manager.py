@@ -27,7 +27,7 @@ def default_config():
     return {
         'bot': {'token': '', 'admin_id': [], 'proxy': ''},
         'crisp': {'id': '', 'key': '', 'website': '', 'msgapi': 'rtm', 'poll_interval': 60,
-                  'tokens': []},
+                  'rotation': 'round_robin', 'tokens': []},
         'welcome': dict(DEFAULT_WELCOME),
         'autoreply': dict(DEFAULT_AUTOREPLY),
         'console': {},

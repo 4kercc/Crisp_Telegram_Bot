@@ -129,6 +129,7 @@ def get_config():
             'website': crisp_cfg.get('website') or '',
             'msgapi': crisp_cfg.get('msgapi') or 'rtm',
             'poll_interval': crisp_cfg.get('poll_interval') or 60,
+            'rotation': crisp_cfg.get('rotation') or 'round_robin',
             'key_set': bool(crisp_cfg.get('key')),
             'tokens': tokens,
         },
@@ -177,6 +178,8 @@ def save_config():
         'msgapi': crisp_in.get('msgapi') if crisp_in.get('msgapi') in ('rtm', 'rest')
                   else current['crisp'].get('msgapi') or 'rtm',
         'poll_interval': crisp_in.get('poll_interval') or current['crisp'].get('poll_interval') or 60,
+        'rotation': crisp_in.get('rotation') if crisp_in.get('rotation') in ('round_robin', 'failover')
+                    else current['crisp'].get('rotation') or 'round_robin',
     }
 
     # 令牌池：key 留空或为掩码时按条目顺序保持原值
