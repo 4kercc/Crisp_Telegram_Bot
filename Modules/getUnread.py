@@ -40,48 +40,73 @@ async def exec(context):
         return
     for conversation in conversations:
         session_id = conversation['session_id']
-        # Crisp api docs: Returns the last batch of messages. 这个last batch到底能有多少我没整明白.
         messages = client.website.get_messages_in_conversation(website_id, session_id, {})
         metas = client.website.get_conversation_metas(website_id, session_id)
         session_map.record_email(session_id, metas.get('email'))
-        for message in messages:
-            # read长度为0时该条消息未读
-            if len(message['read']) != 0:
-                continue
-            try:
-                if message['type'] == 'text':
-                    await _push_text(context, client, config, website_id, session_id, metas, message)
-                elif message['type'] == 'file' and 'image' in str(message['content']['type']):
-                    await _push_image(context, client, config, website_id, session_id, message)
-                else:
-                    log.info('忽略未处理的消息类型：%s（会话 %s）', message['type'], session_id)
-            except Exception as err:
-                log.exception('处理 Crisp 消息失败（会话 %s）', session_id)
-                bus.event('error', f'处理 Crisp 消息失败：{err}', session_id=session_id)
+
+        unread_msgs = [m for m in messages if len(m.get('read', [])) == 0]
+        if not unread_msgs:
+            continue
+
+        try:
+            await _push_batch(context, client, config, website_id, session_id, metas, unread_msgs)
+        except Exception as err:
+            log.exception('处理 Crisp 消息失败（会话 %s）', session_id)
+            bus.event('error', f'处理 Crisp 消息失败：{err}', session_id=session_id)
 
 
-async def _push_text(context, client, config, website_id, session_id, metas, message):
-    # 通过消息指纹将消息置为已读
-    mark_read(client, website_id, session_id, message['fingerprint'])
+async def _push_batch(context, client, config, website_id, session_id, metas, messages):
+    """将同会话中全部未读消息聚合为单卡片推送到 Telegram。"""
+    if not messages:
+        return
 
+    text_contents = []
+    image_urls = []
+    fingerprints = []
+    latest_ts = 0
+
+    for msg in messages:
+        fp = msg.get('fingerprint')
+        if fp:
+            fingerprints.append(fp)
+        ts = msg.get('timestamp') or 0
+        if ts > latest_ts:
+            latest_ts = ts
+        msg_type = msg.get('type')
+        if msg_type == 'text':
+            c = msg.get('content')
+            if c:
+                text_contents.append(str(c))
+        elif msg_type == 'file' and 'image' in str((msg.get('content') or {}).get('type', '')):
+            url = (msg.get('content') or {}).get('url')
+            if url:
+                image_urls.append(url)
+                text_contents.append('[图片]')
+
+    # 检查自动回复与欢迎语匹配
     welcome_cfg = config.get('welcome') or {}
     ttl_hours = welcome_cfg.get('ttl_hours', 24)
     welcome_active = is_welcome_enabled(welcome_cfg) and session_map.is_welcome_needed(session_id, ttl_hours)
 
-    matched, autoreply = match_autoreply(config.get('autoreply'), message['content'], metas=metas)
-
     reply_to_send = ''
-    if matched:
-        reply_to_send = autoreply
-        session_map.mark_welcomed(session_id)
-    elif welcome_active:
+    for c in text_contents:
+        if c != '[图片]':
+            matched, autoreply = match_autoreply(config.get('autoreply'), c, metas=metas)
+            if matched:
+                reply_to_send = autoreply
+                session_map.mark_welcomed(session_id)
+                break
+
+    if not reply_to_send and welcome_active:
         reply_to_send = render_welcome_message(welcome_cfg, metas=metas)
         session_map.mark_welcomed(session_id)
 
-    text = build_push_text(metas, message['content'],
+    # 构造卡片文本
+    text = build_push_text(metas, text_contents if len(text_contents) > 1 else (text_contents[0] if text_contents else ''),
                            autoreply=reply_to_send,
-                           timestamp=message.get('timestamp'))
+                           timestamp=latest_ts or None)
 
+    # 发送自动回复
     if reply_to_send:
         client.website.send_message_in_conversation(website_id, session_id, {
             'type': 'text',
@@ -92,37 +117,28 @@ async def _push_text(context, client, config, website_id, session_id, metas, mes
         bus.event('autoreply', reply_to_send, session_id=session_id, email=metas.get('email'))
         log.info('会话 %s 触发自动回复/欢迎语', session_id)
 
+    # 推送 Telegram
     for admin_id in config['bot']['admin_id']:
-        sent = await context.bot.send_message(chat_id=admin_id, text=text, parse_mode='HTML')
+        if image_urls and len(text_contents) == len(image_urls):
+            sent = await context.bot.send_photo(
+                chat_id=admin_id,
+                photo=image_urls[0],
+                caption=build_push_text(metas, '', image_only=True, timestamp=latest_ts or None),
+                parse_mode='HTML',
+            )
+        else:
+            sent = await context.bot.send_message(chat_id=admin_id, text=text, parse_mode='HTML')
         session_map.record(admin_id, getattr(sent, 'message_id', None), session_id)
 
-    log.info('已推送文本消息到 Telegram（会话 %s）', session_id)
-    bus.event('message_in', message['content'], session_id=session_id,
-              msg_type='text', status='ok', email=metas.get('email'))
+    # 批量标记已读
+    if fingerprints:
+        client.website.mark_messages_read_in_conversation(website_id, session_id, {
+            'from': 'user',
+            'origin': 'chat',
+            'fingerprints': fingerprints,
+        })
 
-
-async def _push_image(context, client, config, website_id, session_id, message):
-    # 通过消息指纹将消息置为已读
-    mark_read(client, website_id, session_id, message['fingerprint'])
-
-    text = build_push_text(metas, '', image_only=True, timestamp=message.get('timestamp'))
-    for admin_id in config['bot']['admin_id']:
-        sent = await context.bot.send_photo(
-            chat_id=admin_id,
-            photo=message['content']['url'],
-            caption=text,
-            parse_mode='HTML',
-        )
-        session_map.record(admin_id, getattr(sent, 'message_id', None), session_id)
-
-    log.info('已推送图片消息到 Telegram（会话 %s）', session_id)
-    bus.event('message_in', '[图片]', session_id=session_id, msg_type='image',
+    log.info('已推送聚合文本消息到 Telegram（会话 %s，共 %d 条）', session_id, len(messages))
+    bus.event('message_in', ' | '.join(text_contents) if text_contents else '[多媒体消息]',
+              session_id=session_id, msg_type='batch' if len(messages) > 1 else 'text',
               status='ok', email=metas.get('email'))
-
-
-def mark_read(client, website_id, session_id, fingerprint):
-    client.website.mark_messages_read_in_conversation(website_id, session_id, {
-        'from': 'user',
-        'origin': 'chat',
-        'fingerprints': [fingerprint],
-    })

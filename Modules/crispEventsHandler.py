@@ -26,7 +26,9 @@ def enabled(config):
 
 
 class CrispRtmBridge:
-    """每次引擎启动新建一个实例，持有 socketio 客户端与会话元数据缓存。"""
+    """每次引擎启动新建一个实例，持有 socketio 客户端与会话元数据缓存。
+    增加会话消息防抖聚合机制（Debounce Buffer），连续发送的消息合并为单张卡片推送。
+    """
 
     def __init__(self, config, client, context):
         self.config = config
@@ -34,6 +36,7 @@ class CrispRtmBridge:
         self.context = context
         self.website_id = config['crisp']['website']
         self.conversationMetasDict = {}  # {session_id: metas}
+        self._session_buffers = {}       # {session_id: {'messages': [...], 'timer': Task}}
         self._stopped = False
         self._new_sio()
         self._refresh_token()
@@ -97,16 +100,38 @@ class CrispRtmBridge:
         try:
             if session_id not in self.conversationMetasDict:
                 self.storeCrispConversationMetas(session_id)
+
             message_type = data.get('type')
-            if message_type == 'text':
-                await self.sendTextMessage(data)
-            elif message_type == 'file' and 'image' in str((data.get('content') or {}).get('type', '')):
-                await self.sendImageMessage(data)
-            else:
+            is_img = (message_type == 'file' and 'image' in str((data.get('content') or {}).get('type', '')))
+
+            if not (message_type == 'text' or is_img):
                 log.info('忽略未处理的消息类型：%s（会话 %s）', message_type, session_id)
+                return
+
+            # 进入防抖聚合队列：2.5 秒内同一会话发送的消息合并推送到 Telegram
+            buf = self._session_buffers.setdefault(session_id, {'messages': [], 'timer': None})
+            buf['messages'].append(data)
+
+            if buf['timer'] is not None and not buf['timer'].done():
+                buf['timer'].cancel()
+
+            buf['timer'] = asyncio.create_task(self._flush_debounce(session_id, delay=2.5))
         except Exception as err:
             log.exception('处理 Crisp 消息失败（会话 %s）', session_id)
             bus.event('error', f'处理 Crisp 消息失败：{err}', session_id=session_id)
+
+    async def _flush_debounce(self, session_id, delay=2.5):
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            return
+
+        buf = self._session_buffers.pop(session_id, None)
+        if not buf or not buf.get('messages'):
+            return
+
+        messages = buf['messages']
+        await self.sendBatchMessages(session_id, messages)
 
     # ---------- 业务 ----------
 
@@ -125,28 +150,59 @@ class CrispRtmBridge:
         endPoint = json.loads(response.text).get('data').get('socket').get('app')
         return endPoint
 
-    async def sendTextMessage(self, message):
-        session_id = message['session_id']
-        metas = self.conversationMetasDict.get(session_id) or {}
+    async def sendBatchMessages(self, session_id, messages):
+        """将同一会话内连续收到的多条消息合并为单张卡片推送到 Telegram。"""
+        if not messages:
+            return
 
+        metas = self.conversationMetasDict.get(session_id) or {}
+        text_contents = []
+        image_urls = []
+        fingerprints = []
+        latest_ts = 0
+
+        for msg in messages:
+            fp = msg.get('fingerprint')
+            if fp:
+                fingerprints.append(fp)
+            ts = msg.get('timestamp') or 0
+            if ts > latest_ts:
+                latest_ts = ts
+            msg_type = msg.get('type')
+            if msg_type == 'text':
+                c = msg.get('content')
+                if c:
+                    text_contents.append(str(c))
+            elif msg_type == 'file' and 'image' in str((msg.get('content') or {}).get('type', '')):
+                url = (msg.get('content') or {}).get('url')
+                if url:
+                    image_urls.append(url)
+                    text_contents.append('[图片]')
+
+        # 检查自动回复与欢迎语匹配（遍历多条消息内容）
         welcome_cfg = self.config.get('welcome') or {}
         ttl_hours = welcome_cfg.get('ttl_hours', 24)
         welcome_active = is_welcome_enabled(welcome_cfg) and session_map.is_welcome_needed(session_id, ttl_hours)
 
-        matched, autoreply = match_autoreply(self.config.get('autoreply'), message['content'], metas=metas)
-
         reply_to_send = ''
-        if matched:
-            reply_to_send = autoreply
-            session_map.mark_welcomed(session_id)
-        elif welcome_active:
+        for c in text_contents:
+            if c != '[图片]':
+                matched, autoreply = match_autoreply(self.config.get('autoreply'), c, metas=metas)
+                if matched:
+                    reply_to_send = autoreply
+                    session_map.mark_welcomed(session_id)
+                    break
+
+        if not reply_to_send and welcome_active:
             reply_to_send = render_welcome_message(welcome_cfg, metas=metas)
             session_map.mark_welcomed(session_id)
 
-        text = build_push_text(metas, message['content'],
+        # 构造聚合卡片文本
+        text = build_push_text(metas, text_contents if len(text_contents) > 1 else (text_contents[0] if text_contents else ''),
                                autoreply=reply_to_send,
-                               timestamp=message.get('timestamp'))
+                               timestamp=latest_ts or None)
 
+        # 发送自动回复到 Crisp 访客
         if reply_to_send:
             self.client.website.send_message_in_conversation(self.website_id, session_id, {
                 'type': 'text',
@@ -157,37 +213,32 @@ class CrispRtmBridge:
             bus.event('autoreply', reply_to_send, session_id=session_id, email=metas.get('email'))
             log.info('会话 %s 触发自动回复/欢迎语', session_id)
 
+        # 推送到 Telegram 管理群
         for admin_id in self.config['bot']['admin_id']:
-            sent = await self.context.bot.send_message(chat_id=admin_id, text=text, parse_mode='HTML')
+            if image_urls and len(text_contents) == len(image_urls):
+                # 纯单张图片
+                sent = await self.context.bot.send_photo(
+                    chat_id=admin_id,
+                    photo=image_urls[0],
+                    caption=build_push_text(metas, '', image_only=True, timestamp=latest_ts or None),
+                    parse_mode='HTML',
+                )
+            else:
+                sent = await self.context.bot.send_message(chat_id=admin_id, text=text, parse_mode='HTML')
             session_map.record(admin_id, getattr(sent, 'message_id', None), session_id)
-        self.mark_messages_read(message)
-        log.info('已推送文本消息到 Telegram（会话 %s）', session_id)
-        bus.event('message_in', message['content'], session_id=session_id,
-                  msg_type='text', status='ok', email=metas.get('email'))
 
-    async def sendImageMessage(self, message):
-        session_id = message['session_id']
-        metas = self.conversationMetasDict.get(session_id) or {}
-        text = build_push_text(metas, '', image_only=True, timestamp=message.get('timestamp'))
-        for admin_id in self.config['bot']['admin_id']:
-            sent = await self.context.bot.send_photo(
-                chat_id=admin_id,
-                photo=message['content']['url'],
-                caption=text,
-                parse_mode='HTML',
+        # 批量标记已读
+        if fingerprints:
+            self.client.website.mark_messages_read_in_conversation(
+                self.website_id,
+                session_id,
+                {'from': 'user', 'origin': 'chat', 'fingerprints': fingerprints},
             )
-            session_map.record(admin_id, getattr(sent, 'message_id', None), session_id)
-        self.mark_messages_read(message)
-        log.info('已推送图片消息到 Telegram（会话 %s）', session_id)
-        bus.event('message_in', '[图片]', session_id=session_id, msg_type='image',
-                  status='ok', email=metas.get('email'))
 
-    def mark_messages_read(self, message):
-        self.client.website.mark_messages_read_in_conversation(
-            self.website_id,
-            message['session_id'],
-            {'from': 'user', 'origin': 'chat', 'fingerprints': [message['fingerprint']]},
-        )
+        log.info('已推送聚合消息到 Telegram（会话 %s，共 %d 条）', session_id, len(messages))
+        bus.event('message_in', ' | '.join(text_contents) if text_contents else '[多媒体消息]',
+                  session_id=session_id, msg_type='batch' if len(messages) > 1 else 'text',
+                  status='ok', email=metas.get('email'))
 
     # Send all unread message.
     async def sendAllUnread(self):
@@ -201,14 +252,9 @@ class CrispRtmBridge:
                 self.website_id, session_id, {})
             if session_id not in self.conversationMetasDict:
                 self.storeCrispConversationMetas(session_id)
-            for message in messages:
-                if len(message['read']) == 0:
-                    if message['type'] == 'text':
-                        await self.sendTextMessage(message)
-                    elif message['type'] == 'file' and 'image' in str(message['content']['type']):
-                        await self.sendImageMessage(message)
-                    else:
-                        log.info('忽略未处理的消息类型：%s（会话 %s）', message['type'], session_id)
+            unread_msgs = [m for m in messages if len(m.get('read', [])) == 0]
+            if unread_msgs:
+                await self.sendBatchMessages(session_id, unread_msgs)
 
     # Connecting to Crisp RTM(WSS) Server，断开后自动重连
     async def start(self):

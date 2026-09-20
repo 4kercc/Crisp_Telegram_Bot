@@ -246,7 +246,12 @@ def _profile_lines(data, metas=None):
 
 
 def build_push_text(metas, content, autoreply='', image_only=False, timestamp=None):
-    """构造推送进 Telegram 的 HTML 消息文本。"""
+    """构造推送进 Telegram 的 HTML 消息文本。
+
+    content 可以是:
+    1. 单条字符串: '你好，请问如何充值？'
+    2. 多条消息列表 (聚合分组): ['你好', '请问有苹果id吗？', '等待回复']
+    """
     metas = metas or {}
     lines = []
 
@@ -267,7 +272,20 @@ def build_push_text(metas, content, autoreply='', image_only=False, timestamp=No
     if image_only:
         return text
 
-    body = f'🧾<b>消息内容</b>：{escape(content)}'
+    if isinstance(content, (list, tuple)):
+        msg_list = [str(c) for c in content if str(c).strip()]
+        if len(msg_list) > 1:
+            body_lines = []
+            for i, item in enumerate(msg_list, 1):
+                body_lines.append(f'<b>消息{i}</b>：{escape(item)}')
+            body = '\n'.join(body_lines)
+        elif len(msg_list) == 1:
+            body = f'🧾<b>消息内容</b>：{escape(msg_list[0])}'
+        else:
+            body = '🧾<b>消息内容</b>：'
+    else:
+        body = f'🧾<b>消息内容</b>：{escape(content)}'
+
     if autoreply:
         body += f'\n💡<b>自动回复</b>：{escape(autoreply)}'
     if text:
