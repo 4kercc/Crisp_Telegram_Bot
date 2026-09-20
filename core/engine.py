@@ -212,7 +212,7 @@ class BotEngine:
             log.info('已启用代理：%s', proxy)
         app = builder.build()
         self._app = app
-        app.add_handler(MessageHandler(filters.REPLY & filters.TEXT, self._on_reply))
+        app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), self._on_tg_message))
         app.add_error_handler(self._on_tg_error)
 
         import Modules
@@ -318,23 +318,38 @@ class BotEngine:
                 log.error('Telegram 异常：%s', err)
                 bus.event('error', f'Telegram 异常：{err_msg}')
 
-    # ---------- Telegram 回复 → Crisp ----------
+    # ---------- Telegram 回复 / 话题消息 → Crisp ----------
 
-    async def _on_reply(self, update, context):
+    async def _on_tg_message(self, update, context):
         message = update.effective_message
-        replied = message.reply_to_message if message else None
-        if replied is None:
+        if not message or not message.text:
             return
-        # 优先查推送时记录的 (chat_id, message_id) 映射，兼容旧版卡片里内嵌 Session 文本
-        session_id = session_map.lookup(update.effective_chat.id, replied.message_id)
+
+        chat_id = update.effective_chat.id if update.effective_chat else None
+        admin_ids = [int(str(x).strip()) for x in (self.config.get('bot', {}).get('admin_id') or []) if str(x).strip()]
+        if chat_id not in admin_ids:
+            return
+
+        session_id = None
+        replied = message.reply_to_message
+
+        # 1. 优先从显式引用回复中反查 session_id
+        if replied is not None:
+            session_id = session_map.lookup(chat_id, replied.message_id)
+            if session_id is None:
+                source_text = replied.text or replied.caption or ''
+                match = SESSION_ID_RE.search(source_text)
+                if match is not None:
+                    session_id = match.group()
+
+        # 2. 若未显式引用，但当前消息位于某个 Forum Topic 话题中（message_thread_id），根据 Topic ID 反查 session_id
+        if session_id is None and message.message_thread_id:
+            session_id = session_map.lookup_session_by_topic(chat_id, message.message_thread_id)
+
         if session_id is None:
-            source_text = replied.text or replied.caption or ''
-            match = SESSION_ID_RE.search(source_text)
-            if match is None:
-                log.warning('无法定位回复目标对应的会话（请回复机器人推送的消息）')
-                bus.event('error', '无法定位回复目标对应的会话（请直接回复机器人推送的消息）')
-                return
-            session_id = match.group()
+            # 既不是对卡片的引用回复，也不是在已注册的 Topic 话题内的发言，忽略该群聊消息
+            return
+
         config = self.config
         query = {
             'type': 'text',

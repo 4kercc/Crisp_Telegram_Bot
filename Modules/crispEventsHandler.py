@@ -10,8 +10,9 @@ import socketio
 from core import session_map
 from core.logbus import bus
 from core.runtime import runtime
-from core.templates import (build_push_text, is_welcome_enabled,
-                            match_autoreply, render_welcome_message)
+from core.templates import (build_push_text, build_topic_name,
+                            is_welcome_enabled, match_autoreply,
+                            render_welcome_message)
 
 log = logging.getLogger('mod.rtm')
 
@@ -213,8 +214,29 @@ class CrispRtmBridge:
             bus.event('autoreply', reply_to_send, session_id=session_id, email=metas.get('email'))
             log.info('会话 %s 触发自动回复/欢迎语', session_id)
 
-        # 推送到 Telegram 管理群
+        # 推送到 Telegram 管理群（支持群话题 Topics 模式）
+        enable_topics = bool(self.config.get('bot', {}).get('topics'))
         for admin_id in self.config['bot']['admin_id']:
+            thread_id = None
+            if enable_topics:
+                thread_id = session_map.lookup_topic(admin_id, session_id)
+                if thread_id is None:
+                    # 为该客户在超级群创建专属话题 (Forum Topic)
+                    topic_title = build_topic_name(metas, session_id)
+                    try:
+                        created_topic = await self.context.bot.create_forum_topic(
+                            chat_id=admin_id,
+                            name=topic_title,
+                        )
+                        thread_id = created_topic.message_thread_id
+                        session_map.record_topic(admin_id, session_id, thread_id)
+                        log.info('已为会话 %s 在群 %s 创建话题：%s (ID: %s)',
+                                 session_id, admin_id, topic_title, thread_id)
+                    except Exception as err:
+                        log.warning('为会话 %s 创建群话题失败（可能未开启 Topics 功能或权限不足）：%s，降级为普通消息',
+                                    session_id, err)
+                        thread_id = None
+
             if image_urls and len(text_contents) == len(image_urls):
                 # 纯单张图片
                 sent = await self.context.bot.send_photo(
@@ -222,10 +244,18 @@ class CrispRtmBridge:
                     photo=image_urls[0],
                     caption=build_push_text(metas, '', image_only=True, timestamp=latest_ts or None),
                     parse_mode='HTML',
+                    message_thread_id=thread_id,
                 )
             else:
-                sent = await self.context.bot.send_message(chat_id=admin_id, text=text, parse_mode='HTML')
+                sent = await self.context.bot.send_message(
+                    chat_id=admin_id,
+                    text=text,
+                    parse_mode='HTML',
+                    message_thread_id=thread_id,
+                )
             session_map.record(admin_id, getattr(sent, 'message_id', None), session_id)
+            if thread_id is not None:
+                session_map.record_topic(admin_id, session_id, thread_id)
 
         # 批量标记已读
         if fingerprints:

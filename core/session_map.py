@@ -77,3 +77,40 @@ def mark_welcomed(session_id):
         while len(_welcome_map) > CAPACITY_WELCOME:
             _welcome_map.popitem(last=False)
 
+
+# ---------- Telegram 话题（Topics / Forum）双向映射 ----------
+
+CAPACITY_TOPIC = 5000
+_topic_map = OrderedDict()        # (chat_id, session_id) -> topic_id (int)
+_topic_reverse_map = OrderedDict() # (chat_id, topic_id) -> session_id (str)
+
+
+def record_topic(chat_id, session_id, topic_id):
+    """记录 (chat_id, session_id) 与 Telegram Topic ID 的对应关系。"""
+    if chat_id is None or not session_id or topic_id is None:
+        return
+    with _lock:
+        _topic_map[(chat_id, session_id)] = int(topic_id)
+        _topic_map.move_to_end((chat_id, session_id))
+        while len(_topic_map) > CAPACITY_TOPIC:
+            _topic_map.popitem(last=False)
+
+        _topic_reverse_map[(chat_id, int(topic_id))] = session_id
+        _topic_reverse_map.move_to_end((chat_id, int(topic_id)))
+        while len(_topic_reverse_map) > CAPACITY_TOPIC:
+            _topic_reverse_map.popitem(last=False)
+
+
+def lookup_topic(chat_id, session_id):
+    """查询指定会话在群组中已存在的话题 ID（不存在则返回 None）。"""
+    with _lock:
+        return _topic_map.get((chat_id, session_id))
+
+
+def lookup_session_by_topic(chat_id, topic_id):
+    """根据群组 ID 和 Topic ID 反查对应的 Crisp session_id。"""
+    if chat_id is None or topic_id is None:
+        return None
+    with _lock:
+        return _topic_reverse_map.get((chat_id, int(topic_id)))
+

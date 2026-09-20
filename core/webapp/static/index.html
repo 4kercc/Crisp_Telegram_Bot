@@ -100,6 +100,12 @@
               <span class="field-label">代理地址（可选，Telegram 与 Crisp 出站共用）</span>
               <input type="text" id="cfg-proxy" placeholder="例如：http://127.0.0.1:7890">
             </label>
+            <div class="field">
+              <label class="checkbox">
+                <input type="checkbox" id="cfg-topics"> 开启 Telegram 论坛话题模式（Topics 分流）
+              </label>
+              <span class="field-hint">开启后，机器人在 Supergroup 超级群中为每个咨询访客自动创建独立 Topic 话题。客服在对应话题内直接打字发言即可回复访客，无需手动右键引用。（需群组开启 Topics 且赋予机器人 Manage Topics 权限）</span>
+            </div>
           </div>
 
           <div class="card">

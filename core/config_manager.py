@@ -25,7 +25,7 @@ class ConfigError(Exception):
 
 def default_config():
     return {
-        'bot': {'token': '', 'admin_id': [], 'proxy': ''},
+        'bot': {'token': '', 'admin_id': [], 'proxy': '', 'topics': False},
         'crisp': {'id': '', 'key': '', 'website': '', 'msgapi': 'rtm', 'poll_interval': 60,
                   'rotation': 'round_robin', 'tokens': []},
         'welcome': dict(DEFAULT_WELCOME),

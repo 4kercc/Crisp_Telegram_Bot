@@ -245,6 +245,41 @@ def _profile_lines(data, metas=None):
     return lines
 
 
+def build_topic_name(metas, session_id):
+    """根据访客元数据生成 Telegram 论坛话题（Topic）标题。
+    格式例如：
+    - 敬礼 (VIP6) | 360103742@qq.com
+    - vip@test.com (VIP2)
+    - 访客_70a89571
+    """
+    metas = metas or {}
+    data = metas.get('data') or {}
+    nickname = metas.get('nickname') or data.get('Username') or data.get('user_name') or data.get('nickname') or ''
+    email = metas.get('email') or ''
+    vip = data.get('VIP')
+
+    parts = []
+    if nickname:
+        parts.append(str(nickname).strip())
+    elif email:
+        parts.append(str(email).strip())
+
+    if vip not in (None, ''):
+        parts.append(f'VIP{vip}')
+
+    if email and nickname and email not in parts:
+        parts.append(str(email).strip())
+
+    title = ' '.join(parts).strip()
+    if not title:
+        # 使用 session_id 短尾缀
+        short_id = str(session_id).replace('session_', '')[:8]
+        title = f'访客_{short_id}'
+
+    # Telegram Topic 名称长度上限通常为 128 字符
+    return title[:100]
+
+
 def build_push_text(metas, content, autoreply='', image_only=False, timestamp=None):
     """构造推送进 Telegram 的 HTML 消息文本。
 

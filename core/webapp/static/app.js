@@ -265,6 +265,7 @@ function fillConfigForm(cfg) {
   $('#hint-token').textContent = cfg.bot.token_set ? '当前 Token 已保存，留空表示不修改' : '';
   $('#cfg-admin').value = (cfg.bot.admin_id || []).join('\n');
   $('#cfg-proxy').value = cfg.bot.proxy || '';
+  $('#cfg-topics').checked = !!cfg.bot.topics;
 
   $('#cfg-crisp-id').value = cfg.crisp.id || '';
   const keyInput = $('#cfg-crisp-key');
@@ -602,6 +603,7 @@ async function saveConfig() {
       token: $('#cfg-token').value.trim(),
       admin_id: $('#cfg-admin').value.split('\n').map((s) => s.trim()).filter(Boolean),
       proxy: $('#cfg-proxy').value.trim(),
+      topics: $('#cfg-topics').checked,
     },
     crisp: {
       id: $('#cfg-crisp-id').value.trim(),
