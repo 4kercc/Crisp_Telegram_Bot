@@ -19,9 +19,12 @@ def tg_api_post(token, method, payload, proxy=''):
     url = f'https://api.telegram.org/bot{token}/{method}'
     try:
         resp = requests.post(url, json=payload, timeout=15, proxies=_proxies(proxy))
-        return resp.json()
+        data = resp.json()
+        if not data.get('ok'):
+            log.warning('Telegram API %s 返回错误：%s (payload: %s)', method, data.get('description'), payload)
+        return data
     except Exception as err:
-        log.error('Telegram API %s 调用失败：%s', method, err)
+        log.error('Telegram API %s 请求异常：%s', method, err)
         return {'ok': False, 'description': str(err)}
 
 
