@@ -237,23 +237,50 @@ class CrispRtmBridge:
                                     session_id, err)
                         thread_id = None
 
-            if image_urls and len(text_contents) == len(image_urls):
-                # 纯单张图片
-                sent = await self.context.bot.send_photo(
-                    chat_id=admin_id,
-                    photo=image_urls[0],
-                    caption=build_push_text(metas, '', image_only=True, timestamp=latest_ts or None),
-                    parse_mode='HTML',
-                    message_thread_id=thread_id,
-                )
-            else:
-                sent = await self.context.bot.send_message(
-                    chat_id=admin_id,
-                    text=text,
-                    parse_mode='HTML',
-                    message_thread_id=thread_id,
-                )
-            session_map.record(admin_id, getattr(sent, 'message_id', None), session_id)
+            sent = None
+            try:
+                if image_urls and len(text_contents) == len(image_urls):
+                    # 纯单张图片
+                    sent = await self.context.bot.send_photo(
+                        chat_id=admin_id,
+                        photo=image_urls[0],
+                        caption=build_push_text(metas, '', image_only=True, timestamp=latest_ts or None),
+                        parse_mode='HTML',
+                        message_thread_id=thread_id,
+                    )
+                else:
+                    sent = await self.context.bot.send_message(
+                        chat_id=admin_id,
+                        text=text,
+                        parse_mode='HTML',
+                        message_thread_id=thread_id,
+                    )
+            except Exception as send_err:
+                if thread_id is not None:
+                    log.warning('带 message_thread_id 推送失败：%s，尝试不带 thread_id 发送', send_err)
+                    try:
+                        if image_urls and len(text_contents) == len(image_urls):
+                            sent = await self.context.bot.send_photo(
+                                chat_id=admin_id,
+                                photo=image_urls[0],
+                                caption=build_push_text(metas, '', image_only=True, timestamp=latest_ts or None),
+                                parse_mode='HTML',
+                            )
+                        else:
+                            sent = await self.context.bot.send_message(
+                                chat_id=admin_id,
+                                text=text,
+                                parse_mode='HTML',
+                            )
+                    except Exception as fallback_err:
+                        log.error('推送 Telegram 失败（目标 %s）：%s', admin_id, fallback_err)
+                        bus.event('error', f'推送 Telegram 失败：{fallback_err}', session_id=session_id)
+                else:
+                    log.error('推送 Telegram 失败（目标 %s）：%s', admin_id, send_err)
+                    bus.event('error', f'推送 Telegram 失败：{send_err}', session_id=session_id)
+
+            if sent:
+                session_map.record(admin_id, getattr(sent, 'message_id', None), session_id)
             if thread_id is not None:
                 session_map.record_topic(admin_id, session_id, thread_id)
 

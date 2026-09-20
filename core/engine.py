@@ -326,8 +326,17 @@ class BotEngine:
             return
 
         chat_id = update.effective_chat.id if update.effective_chat else None
-        admin_ids = [int(str(x).strip()) for x in (self.config.get('bot', {}).get('admin_id') or []) if str(x).strip()]
-        if chat_id not in admin_ids:
+        admin_ids = []
+        for x in (self.config.get('bot', {}).get('admin_id') or []):
+            s = str(x).strip()
+            if s:
+                try:
+                    admin_ids.append(int(s))
+                except ValueError:
+                    admin_ids.append(s)
+
+        # 判断发送者或当前群组是否在配置的推送目标中
+        if chat_id not in admin_ids and str(chat_id) not in [str(a) for a in admin_ids]:
             return
 
         session_id = None

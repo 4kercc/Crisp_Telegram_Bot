@@ -121,6 +121,7 @@ def get_config():
             'token': mask_value(config['bot'].get('token')),
             'admin_id': config['bot'].get('admin_id') or [],
             'proxy': config['bot'].get('proxy') or '',
+            'topics': bool(config['bot'].get('topics', False)),
             'token_set': bool(config['bot'].get('token')),
         },
         'crisp': {
@@ -168,6 +169,7 @@ def save_config():
         'token': _keep_secret(bot_in.get('token'), current['bot'].get('token')),
         'admin_id': admin_list,
         'proxy': str(bot_in.get('proxy') or '').strip(),
+        'topics': bool(bot_in.get('topics', False)),
     }
 
     crisp_in = body.get('crisp') or {}
