@@ -32,6 +32,11 @@ class TokenInfo:
     def check_daily_reset(self):
         """如果距离上次使用超过 24 小时，且未处于 429 冻结期，则自动重置本地用量。"""
         now = time.time()
+        # 检查是否已过冻结期
+        if self.exhausted_until > 0 and now >= self.exhausted_until:
+            self.exhausted_until = 0.0
+            self.last_error = None
+
         if now >= self.exhausted_until and (now - self.last_updated) >= EXHAUSTED_HOURS * 3600:
             if self.used > 0:
                 log.info('令牌 %s… 距离上次使用已满 24 小时，自动重置用量 (原: %d)',
@@ -43,6 +48,7 @@ class TokenInfo:
     def exhausted(self):
         self.check_daily_reset()
         return time.time() < self.exhausted_until
+
 
 
 class TokenPool:
@@ -174,15 +180,43 @@ class TokenPool:
                 # 轮询模式：请求完成后顺延至下一个令牌，准备下一次请求
                 self._select_next_token()
 
-    def on_rate_limited(self):
-        """收到 429：标记当前令牌 24 小时后恢复并切换。"""
+    def on_rate_limited(self, retry_after=None):
+        """收到 429：根据响应头或阶梯退避标记冻结时间，并自动切换备用令牌。"""
         with self._lock:
             token = self._tokens[self._index]
-            token.exhausted_until = time.time() + EXHAUSTED_HOURS * 3600
+            # 如果服务端给出了具体的重试秒数（如 60 秒），使用服务端秒数；否则短时冷却 5 分钟（300s）而不是粗暴禁用 24 小时
+            freeze_sec = int(retry_after) if retry_after else 300
+            token.exhausted_until = time.time() + freeze_sec
             token.last_updated = time.time()
-            token.last_error = '触发 Crisp 限流(429)'
+            token.last_error = f'临时限流 429（{freeze_sec}秒后解除）'
             self._save_state()
-            self._rotate(f'令牌 {token.identifier[:8]}… 触发限流(429)，{EXHAUSTED_HOURS} 小时后恢复')
+            self._rotate(f'令牌 {token.identifier[:8]}… 触发临时限流(429)，{freeze_sec} 秒后自动恢复')
+
+    def unfreeze_token(self, identifier):
+        """手动解除某个令牌的冻结/耗尽状态并重置错误。"""
+        with self._lock:
+            for t in self._tokens:
+                if t.identifier == identifier or t.identifier.startswith(identifier):
+                    t.exhausted_until = 0.0
+                    t.last_error = None
+                    self._save_state()
+                    log.info('已手动解除令牌 %s… 的冻结状态', t.identifier[:8])
+                    return True
+            return False
+
+    def reset_token_usage(self, identifier):
+        """手动重置某个令牌的本地用量计数为 0。"""
+        with self._lock:
+            for t in self._tokens:
+                if t.identifier == identifier or t.identifier.startswith(identifier):
+                    t.used = 0
+                    t.exhausted_until = 0.0
+                    t.last_error = None
+                    t.last_updated = time.time()
+                    self._save_state()
+                    log.info('已手动重置令牌 %s… 的用量计数', t.identifier[:8])
+                    return True
+            return False
 
     def update_usage(self, used, limit=None, reset_seconds=None):
         """用服务端反馈（响应头等）校准本地计数。"""
@@ -264,8 +298,8 @@ def install_request_hook(pool):
         kwargs['auth'] = HTTPBasicAuth(token.identifier, token.key)
         resp = original_request(*args, **kwargs)
         if resp.status_code == 429:
-            # 先标记当前令牌耗尽并切换，再对新令牌重试一次
-            pool.on_rate_limited()
+            retry_after = resp.headers.get('Retry-After') or resp.headers.get('x-ratelimit-reset')
+            pool.on_rate_limited(retry_after=retry_after)
             token = pool.current()
             kwargs['auth'] = HTTPBasicAuth(token.identifier, token.key)
             resp = original_request(*args, **kwargs)

@@ -276,6 +276,22 @@ def engine_action(action):
         return jsonify(ok=False, error=str(err), engine=engine.status()), 400
 
 
+# ---------- 令牌池管理 ----------
+
+@bp.post('/api/tokens/<identifier>/reset')
+@login_required
+def reset_token_route(identifier):
+    pool = getattr(runtime, 'token_pool', None)
+    if pool is None:
+        return jsonify(ok=False, error='令牌池未就绪'), 400
+    ok = pool.reset_token_usage(identifier)
+    if ok:
+        bus.event('system', f'已手动重置令牌 {identifier[:8]}… 的用量与状态')
+        return jsonify(ok=True)
+    return jsonify(ok=False, error='未找到对应令牌'), 404
+
+
+
 # ---------- 连通性测试 ----------
 
 @bp.post('/api/test/crisp')

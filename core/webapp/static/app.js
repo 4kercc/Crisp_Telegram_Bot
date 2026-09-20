@@ -345,12 +345,32 @@ function renderTokenUsage(tokens, current, limit) {
       badge.textContent = '使用中';
     } else if (t.exhausted) {
       badge.className = 'token-badge exhausted';
-      badge.textContent = '已耗尽';
+      badge.textContent = '已冻结/耗尽';
     }
     const used = document.createElement('span');
     used.className = 'used';
     used.textContent = `${t.used} / ${limit}（剩余 ${t.remaining}）`;
-    head.append(name, badge, used);
+
+    const resetBtn = document.createElement('button');
+    resetBtn.type = 'button';
+    resetBtn.className = 'tu-reset-btn';
+    resetBtn.textContent = '重置';
+    resetBtn.title = '重置此令牌计数与冻结状态';
+    resetBtn.addEventListener('click', async () => {
+      try {
+        const { ok, data } = await api(`/api/tokens/${t.identifier}/reset`, { method: 'POST' });
+        if (ok) {
+          toast(`已重置令牌 ${t.identifier.slice(0, 8)}…`);
+          refreshStatus();
+        } else {
+          toast(data.error || '重置失败', true);
+        }
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+
+    head.append(name, badge, used, resetBtn);
     const bar = document.createElement('div');
     bar.className = 'usage-bar';
     const fill = document.createElement('div');
@@ -361,6 +381,7 @@ function renderTokenUsage(tokens, current, limit) {
     wrap.appendChild(row);
   });
 }
+
 
 function updatePollIntervalVisibility() {
   const mode = document.querySelector('input[name="cfg-msgapi"]:checked');
