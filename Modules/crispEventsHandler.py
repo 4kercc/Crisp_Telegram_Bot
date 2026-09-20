@@ -7,7 +7,7 @@ import logging
 import requests
 import socketio
 
-from core import session_map
+from core import session_map, tg_compat
 from core.logbus import bus
 from core.runtime import runtime
 from core.templates import (build_push_text, build_topic_name,
@@ -216,6 +216,9 @@ class CrispRtmBridge:
 
         # 推送到 Telegram 管理群（支持群话题 Topics 模式）
         enable_topics = bool(self.config.get('bot', {}).get('topics'))
+        token = self.config['bot']['token']
+        proxy = str(self.config['bot'].get('proxy') or '').strip()
+
         for admin_id in self.config['bot']['admin_id']:
             thread_id = None
             if enable_topics:
@@ -224,63 +227,47 @@ class CrispRtmBridge:
                     # 为该客户在超级群创建专属话题 (Forum Topic)
                     topic_title = build_topic_name(metas, session_id)
                     try:
-                        created_topic = await self.context.bot.create_forum_topic(
+                        thread_id = await tg_compat.create_forum_topic(
+                            token=token,
                             chat_id=admin_id,
                             name=topic_title,
+                            proxy=proxy,
                         )
-                        thread_id = created_topic.message_thread_id
-                        session_map.record_topic(admin_id, session_id, thread_id)
-                        log.info('已为会话 %s 在群 %s 创建话题：%s (ID: %s)',
-                                 session_id, admin_id, topic_title, thread_id)
+                        if thread_id:
+                            session_map.record_topic(admin_id, session_id, thread_id)
                     except Exception as err:
-                        log.warning('为会话 %s 创建群话题失败（可能未开启 Topics 功能或权限不足）：%s，降级为普通消息',
-                                    session_id, err)
+                        log.warning('为会话 %s 创建群话题失败：%s，降级为普通群消息', session_id, err)
                         thread_id = None
 
-            sent = None
+            sent_msg_id = None
             try:
                 if image_urls and len(text_contents) == len(image_urls):
                     # 纯单张图片
-                    sent = await self.context.bot.send_photo(
+                    caption = build_push_text(metas, '', image_only=True, timestamp=latest_ts or None)
+                    sent_msg_id = await tg_compat.send_photo(
+                        token=token,
                         chat_id=admin_id,
-                        photo=image_urls[0],
-                        caption=build_push_text(metas, '', image_only=True, timestamp=latest_ts or None),
+                        photo_url=image_urls[0],
+                        caption=caption,
                         parse_mode='HTML',
                         message_thread_id=thread_id,
+                        proxy=proxy,
                     )
                 else:
-                    sent = await self.context.bot.send_message(
+                    sent_msg_id = await tg_compat.send_message(
+                        token=token,
                         chat_id=admin_id,
                         text=text,
                         parse_mode='HTML',
                         message_thread_id=thread_id,
+                        proxy=proxy,
                     )
             except Exception as send_err:
-                if thread_id is not None:
-                    log.warning('带 message_thread_id 推送失败：%s，尝试不带 thread_id 发送', send_err)
-                    try:
-                        if image_urls and len(text_contents) == len(image_urls):
-                            sent = await self.context.bot.send_photo(
-                                chat_id=admin_id,
-                                photo=image_urls[0],
-                                caption=build_push_text(metas, '', image_only=True, timestamp=latest_ts or None),
-                                parse_mode='HTML',
-                            )
-                        else:
-                            sent = await self.context.bot.send_message(
-                                chat_id=admin_id,
-                                text=text,
-                                parse_mode='HTML',
-                            )
-                    except Exception as fallback_err:
-                        log.error('推送 Telegram 失败（目标 %s）：%s', admin_id, fallback_err)
-                        bus.event('error', f'推送 Telegram 失败：{fallback_err}', session_id=session_id)
-                else:
-                    log.error('推送 Telegram 失败（目标 %s）：%s', admin_id, send_err)
-                    bus.event('error', f'推送 Telegram 失败：{send_err}', session_id=session_id)
+                log.error('推送 Telegram 失败（目标 %s）：%s', admin_id, send_err)
+                bus.event('error', f'推送 Telegram 失败：{send_err}', session_id=session_id)
 
-            if sent:
-                session_map.record(admin_id, getattr(sent, 'message_id', None), session_id)
+            if sent_msg_id:
+                session_map.record(admin_id, sent_msg_id, session_id)
             if thread_id is not None:
                 session_map.record_topic(admin_id, session_id, thread_id)
 
