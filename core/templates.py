@@ -209,22 +209,15 @@ def _profile_lines(data, metas=None):
     data = data or {}
     metas = metas or {}
 
-    # 用户名 / 昵称
+    # 用户名 / 昵称（第一行优先作为标题展示）
     nickname = metas.get('nickname') or data.get('Username') or data.get('user_name') or data.get('nickname') or ''
-
-    profile = []
-    if data.get('VIP') not in (None, ''):
-        vip_text = f'🪪<b>VIP等级</b>：{escape(data["VIP"])}'
-        if nickname:
-            vip_text += f'（{escape(nickname)}）'
-        profile.append(vip_text)
-    elif nickname:
-        profile.append(f'👤<b>用户名称</b>：{escape(nickname)}')
+    if nickname:
+        lines.append(f'👤<b>用户名称</b>：{escape(nickname)}')
+    elif metas.get('email'):
+        lines.append(f'📧<b>电子邮箱</b>：{escape(metas.get("email"))}')
 
     if data.get('Money'):
-        profile.append(f'💰<b>账户余额</b>：{escape(data["Money"])}')
-    if profile:
-        lines.append('  '.join(profile))
+        lines.append(f'💰<b>账户余额</b>：{escape(data["Money"])}')
 
     if data.get('Plan'):
         lines.append(f'🪪<b>使用套餐</b>：{escape(data["Plan"])}')
@@ -290,14 +283,15 @@ def build_push_text(metas, content, autoreply='', image_only=False, timestamp=No
     metas = metas or {}
     lines = []
 
-    email = metas.get('email') or ''
-    if email:
-        lines.append(f'📧<b>电子邮箱</b>：{escape(email)}')
     data = metas.get('data') or {}
-    if isinstance(data, dict):
+    if isinstance(data, dict) and data:
         lines.extend(_profile_lines(data, metas=metas))
-    elif metas.get('nickname'):
-        lines.append(f'👤<b>用户名称</b>：{escape(metas.get("nickname"))}')
+    else:
+        nickname = metas.get('nickname') or ''
+        if nickname:
+            lines.append(f'👤<b>用户名称</b>：{escape(nickname)}')
+        elif metas.get('email'):
+            lines.append(f'📧<b>电子邮箱</b>：{escape(metas.get("email"))}')
 
     message_time = format_timestamp(timestamp)
     if message_time:
@@ -325,4 +319,5 @@ def build_push_text(metas, content, autoreply='', image_only=False, timestamp=No
         body += f'\n💡<b>自动回复</b>：{escape(autoreply)}'
     if text:
         text += '\n\n'
+    return text + body
     return text + body
