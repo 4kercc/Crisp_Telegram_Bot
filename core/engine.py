@@ -27,6 +27,29 @@ class EngineError(Exception):
     pass
 
 
+def _message_thread_id(message):
+    """安全读取消息所在的论坛话题 ID。
+
+    打包内置的 python-telegram-bot 版本较旧（v20.0a4），Message 对象上没有
+    message_thread_id 属性，直接取值会抛 AttributeError 而中断整个消息处理，
+    这里按「属性 → api_kwargs → to_dict」逐级兜底。
+    """
+    value = getattr(message, 'message_thread_id', None)
+    if value is None:
+        api_kwargs = getattr(message, 'api_kwargs', None) or {}
+        if isinstance(api_kwargs, dict):
+            value = api_kwargs.get('message_thread_id')
+    if value is None:
+        try:
+            value = (message.to_dict() or {}).get('message_thread_id')
+        except Exception:
+            value = None
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 class BotEngine:
     def __init__(self, config_manager):
         self.config_manager = config_manager
@@ -72,7 +95,8 @@ class BotEngine:
             if tid and tkey and (tid, tkey) not in entries:
                 entries.append((tid, tkey))
 
-        from core.token_pool import TokenPool, install_request_hook
+        from core.token_pool import (AUTH_COOLDOWN, TokenPool,
+                                     install_request_hook)
         from core import runtime
         cfg_dir = os.path.dirname(os.path.abspath(self.config_manager.path)) if self.config_manager else None
         state_file = os.path.join(cfg_dir, '.tokens_state.json') if cfg_dir else None
@@ -80,6 +104,10 @@ class BotEngine:
         pool = TokenPool(entries, rotation=rotation, state_file=state_file)
         runtime.token_pool = pool
         install_request_hook(pool)
+        if rotation == 'round_robin' and len(entries) > 1 and crisp_cfg.get('msgapi') == 'rtm':
+            log.info('RTM 模式启用顺序轮询：若池中混有失效令牌会返回 401 invalid_session，'
+                     '已启用自动隔离（失效令牌隔离 %d 分钟后重试）',
+                     max(1, AUTH_COOLDOWN // 60))
 
         crisp_client = self._build_crisp_client(config, pool)
         with self._lock:
@@ -374,8 +402,9 @@ class BotEngine:
                     session_id = match.group()
 
         # 2. 若未显式引用，但当前消息位于某个 Forum Topic 话题中（message_thread_id），根据 Topic ID 反查 session_id
-        if session_id is None and message.message_thread_id:
-            session_id = session_map.lookup_session_by_topic(chat_id, message.message_thread_id)
+        thread_id = _message_thread_id(message)
+        if session_id is None and thread_id:
+            session_id = session_map.lookup_session_by_topic(chat_id, thread_id)
 
         if session_id is None:
             # 既不是对卡片的引用回复，也不是在已注册的 Topic 话题内的发言，忽略该群聊消息

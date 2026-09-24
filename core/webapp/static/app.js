@@ -361,6 +361,9 @@ function renderTokenUsage(tokens, current, limit, meta) {
     } else if (t.frozen && t.freeze_reason === 'rate_limit') {
       badge.className = 'token-badge cooldown';
       badge.textContent = `限流冷却 ${formatDuration(t.frozen_seconds)}`;
+    } else if (t.frozen && t.freeze_reason === 'auth') {
+      badge.className = 'token-badge exhausted';
+      badge.textContent = `鉴权失败 ${formatDuration(t.frozen_seconds)}`;
     } else if (t.frozen) {
       badge.className = 'token-badge cooldown';
       badge.textContent = `退避重试 ${formatDuration(t.frozen_seconds)}`;

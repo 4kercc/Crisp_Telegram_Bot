@@ -22,6 +22,7 @@ DEFAULT_LIMIT = 400          # 单枚令牌每日硬上限（官方 500，留出
 DEFAULT_ROTATE_AT = 300      # 用满这么多次就换下一枚
 RATE_LIMIT_COOLDOWN = 300    # 收到 429 且服务端未给 Retry-After 时的冷却秒数
 ERROR_COOLDOWN = 900         # 令牌鉴权/接口异常时的退避秒数
+AUTH_COOLDOWN = 1800         # 令牌被判定失效（401 invalid_session 等）后的隔离秒数
 RESET_HOUR = 0               # 每日额度重置时刻（0 点）
 
 
@@ -294,6 +295,21 @@ class TokenPool:
             self._save_state()
             self._rotate(f'令牌 {token.identifier[:8]}… {reason}，{max(1, cooldown // 60)} 分钟后重试')
 
+    def on_auth_failed(self, reason, cooldown=AUTH_COOLDOWN):
+        """令牌被 Crisp 判定无效（401 invalid_session / 403）：隔离一段时间并切换。
+
+        典型场景：插件被卸载、令牌被重置，或 4 枚令牌里混入了失效令牌。
+        轮询模式下如果不隔离，失效令牌会被反复轮到并持续抛错。
+        """
+        with self._lock:
+            token = self._tokens[self._index]
+            token.freeze(cooldown, 'auth')
+            token.last_updated = time.time()
+            token.last_error = f'鉴权失败：{reason}'
+            self._save_state()
+            self._rotate(
+                f'令牌 {token.identifier[:8]}… 鉴权失败（{reason}），已隔离 {max(1, cooldown // 60)} 分钟')
+
     def unfreeze_token(self, identifier):
         """手动解除某个令牌的冻结状态。"""
         with self._lock:
@@ -373,35 +389,81 @@ class TokenPool:
 
 
 _hook_installed_by = None
+_original_request = None
 
 
 def install_request_hook(pool):
-    """把用量统计与限流轮换挂到 crisp_api 的 HTTP 层（幂等，随引擎重启更新池）。"""
-    global _hook_installed_by
+    """把用量统计、限流与鉴权失败处理挂到 crisp_api 的 HTTP 层（幂等，随引擎重启更新池）。
+
+    必须始终包住「最初的」crisp_api.request：引擎每次重启都会重新安装，
+    若直接包住上一次的包装函数，层层叠加会导致重复计数、并让旧令牌池
+    覆盖新令牌池的认证信息。
+    """
+    global _hook_installed_by, _original_request
     if _hook_installed_by is pool:
         return
     import crisp_api
     from requests.auth import HTTPBasicAuth
 
-    original_request = crisp_api.request
+    if _original_request is None:
+        _original_request = getattr(crisp_api, '_crisp_tgbot_original_request', None) \
+            or crisp_api.request
+        # 记录真正的原始实现，便于后续重启时重新包裹
+        crisp_api._crisp_tgbot_original_request = _original_request
+    original_request = _original_request
 
     def request(*args, **kwargs):
         pool.on_request()
         token = pool.current()
         kwargs['auth'] = HTTPBasicAuth(token.identifier, token.key)
         resp = original_request(*args, **kwargs)
+
         if resp.status_code == 429:
             retry_after = resp.headers.get('Retry-After') or resp.headers.get('x-ratelimit-reset')
             pool.on_rate_limited(retry_after=retry_after)
-            token = pool.current()
-            kwargs['auth'] = HTTPBasicAuth(token.identifier, token.key)
-            resp = original_request(*args, **kwargs)
+            resp = _retry_with_current(pool, original_request, args, kwargs, token, resp)
+
+        elif resp.status_code in (401, 403):
+            # 令牌失效（如 invalid_session）：隔离该令牌并换下一枚重试一次，
+            # 否则轮询模式会反复轮到失效令牌并持续抛错
+            pool.on_auth_failed(_short_error(resp))
+            resp = _retry_with_current(pool, original_request, args, kwargs, token, resp)
+
         _absorb_rate_limit_headers(pool, resp)
         return resp
 
     crisp_api.request = request
     _hook_installed_by = pool
     log.info('已安装 Crisp 请求计数与限流轮换钩子')
+
+
+def _retry_with_current(pool, original_request, args, kwargs, failed_token, fallback_resp):
+    """用池中已切换的新令牌重发一次请求；没换到别的令牌就直接返回原响应。"""
+    from requests.auth import HTTPBasicAuth
+
+    token = pool.current()
+    if token.identifier == failed_token.identifier:
+        return fallback_resp
+
+    retry_kwargs = dict(kwargs)
+    retry_kwargs['auth'] = HTTPBasicAuth(token.identifier, token.key)
+    return original_request(*args, **retry_kwargs)
+
+
+def _short_error(resp):
+    """从 Crisp 错误响应里提取一句人话，用于日志与界面展示。"""
+    try:
+        payload = resp.json() or {}
+    except Exception:
+        payload = {}
+    if isinstance(payload, dict):
+        detail = payload.get('data') or {}
+        message = detail.get('message') if isinstance(detail, dict) else None
+        message = message or payload.get('message') or payload.get('reason')
+        if message:
+            return str(message)
+    text = (resp.text or '').strip().replace('\n', ' ')
+    return text[:120] or f'HTTP {resp.status_code}'
 
 
 def _absorb_rate_limit_headers(pool, resp):
