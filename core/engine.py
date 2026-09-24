@@ -175,7 +175,8 @@ class BotEngine:
             except Exception as err:
                 last_error = err
                 log.warning('令牌 %s… 连接 Crisp 失败：%s，尝试池中下一个令牌', current.identifier[:8], err)
-                pool.on_rate_limited()
+                # 鉴权/接口异常属于令牌自身不可用，短退避后仍可重试（不要按 429 冻结）
+                pool.on_token_error(f'连接 Crisp 失败：{err}')
 
         message = str(last_error)
         if last_error.__class__.__name__ == 'RouteError' and last_error.args and isinstance(last_error.args[0], dict):

@@ -447,8 +447,14 @@ button.ghost { background: transparent; }
   font-size: 12.5px; margin-bottom: 5px; font-family: var(--mono);
 }
 .token-usage-row .tu-head .used { color: var(--text-dim); }
+.tu-tip {
+  font-size: 11.5px; color: var(--text-dim); margin-bottom: 12px;
+  padding: 6px 10px; border-radius: 6px;
+  background: var(--bg-input); border: 1px dashed var(--border);
+}
 .usage-bar {
-  height: 7px; background: var(--bg-input); border-radius: 999px; overflow: hidden;
+  position: relative;
+  height: 7px; background: var(--bg-input); border-radius: 999px;
   border: 1px solid var(--border);
 }
 .usage-bar .fill {
@@ -457,12 +463,18 @@ button.ghost { background: transparent; }
 }
 .usage-bar .fill.warn { background: var(--amber); }
 .usage-bar .fill.full { background: var(--red); }
+.usage-marker {
+  position: absolute; top: -2px; width: 2px; height: 11px;
+  background: var(--text-dim); opacity: .55; border-radius: 2px;
+}
 .token-badge {
   display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 10.5px;
   font-family: inherit; margin-left: 8px;
 }
 .token-badge.current { background: rgba(79, 140, 255, .18); color: var(--accent); }
 .token-badge.exhausted { background: rgba(240, 86, 94, .18); color: var(--red); }
+.token-badge.cooldown { background: rgba(232, 163, 61, .18); color: var(--amber); }
+.token-badge.rotated { background: rgba(139, 150, 173, .18); color: var(--text-dim); }
 .tu-reset-btn {
   background: rgba(139, 150, 173, 0.15);
   border: 1px solid var(--border);

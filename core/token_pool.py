@@ -1,9 +1,12 @@
-"""Crisp 插件令牌池：多枚开发令牌自动轮换，规避 400 次/24h 限额（预留缓冲）。
+"""Crisp 插件令牌池：多枚开发令牌自动调度，规避 500 次/24h 限额。
 
-原理：Crisp 官方未提供配额查询接口，这里在 crisp_api 的 HTTP 层挂钩——
-每次 REST 请求按当前令牌计数；用量逼近限额或收到 429 时，自动切换到
-用量最少且未耗尽的令牌并重新 authenticate，对上层模块完全透明。
-支持本地持久化记录用量与 24 小时过期重置，防止服务重启后计数归零。
+调度规则（可用「令牌池调度模式」切换轮询 / 主备）：
+- 计数：每次 Crisp REST 请求按当前令牌累加当日用量
+- 让位：单枚令牌当日用满 rotate_at（默认 300）次后，改用池中用量更少的令牌
+- 封顶：达到当日硬上限（默认 400，官方 500 的 8 折）后冻结该令牌，直到次日 0 点
+- 重置：每日 0 点（本地时间）自动清零用量并解除全部冻结
+- 容错：429 按服务端提示短时冷却（默认 5 分钟）；令牌鉴权失败短退避后重试
+- 持久化：用量与冻结状态落盘 .tokens_state.json，进程重启不丢失
 """
 import json
 import logging
@@ -15,77 +18,107 @@ from core.logbus import bus
 
 log = logging.getLogger('token_pool')
 
-DEFAULT_LIMIT = 400
-DEFAULT_THRESHOLD = 20
-EXHAUSTED_HOURS = 24
+DEFAULT_LIMIT = 400          # 单枚令牌每日硬上限（官方 500，留出缓冲）
+DEFAULT_ROTATE_AT = 300      # 用满这么多次就换下一枚
+RATE_LIMIT_COOLDOWN = 300    # 收到 429 且服务端未给 Retry-After 时的冷却秒数
+ERROR_COOLDOWN = 900         # 令牌鉴权/接口异常时的退避秒数
+RESET_HOUR = 0               # 每日额度重置时刻（0 点）
+
+
+def _day_key(ts=None):
+    """时间戳所属的自然日（本地时区），用于判断是否跨天。"""
+    return time.strftime('%Y-%m-%d', time.localtime(ts if ts else time.time()))
+
+
+def _next_reset_ts(now=None):
+    """下一次额度重置时刻（次日 00:00 本地时间）的时间戳。"""
+    lt = time.localtime(now or time.time())
+    return time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday + 1, RESET_HOUR, 0, 0, 0, 0, -1))
 
 
 class TokenInfo:
-    def __init__(self, identifier, key, used=0, exhausted_until=0.0, last_updated=0.0):
+    def __init__(self, identifier, key, used=0, day=None, frozen_until=0.0,
+                 freeze_reason=None, last_updated=0.0):
         self.identifier = identifier
         self.key = key
         self.used = int(used or 0)
-        self.exhausted_until = float(exhausted_until or 0.0)
+        self.day = day or _day_key()
+        self.frozen_until = float(frozen_until or 0.0)
+        self.freeze_reason = freeze_reason
         self.last_updated = float(last_updated or time.time())
         self.last_error = None
 
-    def check_daily_reset(self):
-        """如果距离上次使用超过 24 小时，且未处于 429 冻结期，则自动重置本地用量。"""
-        now = time.time()
-        # 检查是否已过冻结期
-        if self.exhausted_until > 0 and now >= self.exhausted_until:
-            self.exhausted_until = 0.0
-            self.last_error = None
+    # 旧字段名兼容（早期版本用 exhausted_until 表示冻结截止时间）
+    @property
+    def exhausted_until(self):
+        return self.frozen_until
 
-        if now >= self.exhausted_until and (now - self.last_updated) >= EXHAUSTED_HOURS * 3600:
-            if self.used > 0:
-                log.info('令牌 %s… 距离上次使用已满 24 小时，自动重置用量 (原: %d)',
-                         self.identifier[:8], self.used)
-                self.used = 0
-                self.exhausted_until = 0.0
-                self.last_updated = now
+    @exhausted_until.setter
+    def exhausted_until(self, value):
+        self.frozen_until = float(value or 0.0)
+
+    def rollover_if_new_day(self):
+        """跨过 0 点后清零当日用量并解除冻结，返回是否发生了重置。"""
+        today = _day_key()
+        if self.day == today:
+            return False
+        if self.used or self.frozen_until:
+            log.info('令牌 %s… 已到每日重置时刻（0 点），用量归零（原 %d 次）',
+                     self.identifier[:8], self.used)
+        self.used = 0
+        self.frozen_until = 0.0
+        self.freeze_reason = None
+        self.last_error = None
+        self.day = today
+        return True
+
+    def check_daily_reset(self):
+        """兼容旧调用名。"""
+        return self.rollover_if_new_day()
+
+    def is_frozen(self):
+        return time.time() < self.frozen_until
 
     def exhausted(self):
-        self.check_daily_reset()
-        return time.time() < self.exhausted_until
+        """兼容旧调用名。"""
+        return self.is_frozen()
 
+    def freeze(self, seconds, reason):
+        """冻结（不缩短已有的更长期冻结）。"""
+        self.frozen_until = max(self.frozen_until, time.time() + max(0.0, float(seconds)))
+        self.freeze_reason = reason
 
 
 class TokenPool:
-    def __init__(self, tokens, limit=DEFAULT_LIMIT, threshold=DEFAULT_THRESHOLD,
+    def __init__(self, tokens, limit=DEFAULT_LIMIT, rotate_at=None,
                  rotation='round_robin', state_file=None):
         self._lock = threading.RLock()
         self.state_file = state_file
         self.limit = int(limit) or DEFAULT_LIMIT
-        self.threshold = max(0, int(threshold) if threshold is not None else DEFAULT_THRESHOLD)
+        self.rotate_at = max(0, int(rotate_at)) if rotate_at is not None \
+            else min(DEFAULT_ROTATE_AT, self.limit)
         self.rotation = str(rotation or 'round_robin').strip().lower()
         self._client = None
         self._last_no_candidate_warn = 0.0
 
-        # 从持久化文件读取已保存的用量状态
         saved_state = self._load_state()
 
         self._tokens = []
-        now = time.time()
-        for i, k in tokens:
-            st = saved_state.get(i) or {}
-            used = st.get('used', 0)
-            ex_until = st.get('exhausted_until', 0.0)
-            last_up = st.get('last_updated', now)
-            t_info = TokenInfo(i, k, used=used, exhausted_until=ex_until, last_updated=last_up)
-            t_info.check_daily_reset()
+        for identifier, key in tokens:
+            state = self._restore_state(saved_state.get(identifier))
+            t_info = TokenInfo(identifier, key, **state)
+            t_info.rollover_if_new_day()
             self._tokens.append(t_info)
 
-        # 优先选择用量最少且未耗尽的令牌作为起始
+        # 起始令牌：优先当日用量少、且未冻结的那一枚
         if self._tokens:
-            avail = [t for t in self._tokens if not t.exhausted()]
-            if avail:
-                best = min(avail, key=lambda t: t.used)
-                self._index = self._tokens.index(best)
-            else:
-                self._index = 0
+            preferred = self._preferred() or self._tokens
+            best = min(preferred, key=lambda t: (t.is_frozen(), t.used))
+            self._index = self._tokens.index(best)
         else:
             self._index = 0
+
+    # ---------- 持久化 ----------
 
     def _load_state(self):
         if not self.state_file or not os.path.exists(self.state_file):
@@ -98,6 +131,33 @@ class TokenPool:
             log.warning('读取令牌用量持久化文件失败：%s', err)
             return {}
 
+    @staticmethod
+    def _restore_state(saved):
+        """还原单个令牌的持久化状态，并兼容旧版字段与语义。"""
+        st = saved or {}
+        now = time.time()
+        last_updated = float(st.get('last_updated') or now)
+        day = st.get('day') or _day_key(last_updated)
+
+        frozen_until = float(st.get('frozen_until') or 0.0)
+        freeze_reason = st.get('freeze_reason')
+        if not frozen_until:
+            legacy = float(st.get('exhausted_until') or 0.0)
+            if legacy > now:
+                # 旧版动辄冻结 24 小时，升级后最多保留到下一次 0 点重置
+                frozen_until = min(legacy, _next_reset_ts(now))
+                freeze_reason = freeze_reason or 'quota'
+        if frozen_until and frozen_until <= now:
+            frozen_until = 0.0
+
+        return {
+            'used': st.get('used', 0),
+            'day': day,
+            'frozen_until': frozen_until,
+            'freeze_reason': freeze_reason if frozen_until else None,
+            'last_updated': last_updated,
+        }
+
     def _save_state(self):
         if not self.state_file:
             return
@@ -106,7 +166,9 @@ class TokenPool:
             for t in self._tokens:
                 state[t.identifier] = {
                     'used': t.used,
-                    'exhausted_until': t.exhausted_until,
+                    'day': t.day,
+                    'frozen_until': t.frozen_until,
+                    'freeze_reason': t.freeze_reason,
                     'last_updated': t.last_updated,
                 }
             tmp = self.state_file + '.tmp'
@@ -119,6 +181,8 @@ class TokenPool:
         except Exception as err:
             log.warning('保存令牌用量持久化文件失败：%s', err)
 
+    # ---------- 选择与切换 ----------
+
     def bind_client(self, client):
         """令牌切换时自动对 Crisp 客户端重新 authenticate。"""
         self._client = client
@@ -127,77 +191,116 @@ class TokenPool:
         with self._lock:
             return self._tokens[self._index]
 
-    def _select_next_token(self):
-        """根据轮换策略选出下一个目标令牌：
-        - round_robin (轮询): 每次请求顺次轮转到下一个未耗尽令牌，多个令牌均匀分摊请求
-        - failover (主备故障转移): 固定使用当前令牌，直到达到 380 次熔断或收到 429 后再切换
-        """
+    def _alive(self):
+        return [t for t in self._tokens if not t.is_frozen()]
+
+    def _preferred(self):
+        """优先返回当日用量未达让位阈值的令牌；都已达标时退化为全部存活令牌。"""
+        alive = self._alive()
+        fresh = [t for t in alive if t.used < self.rotate_at]
+        return fresh or alive
+
+    def _switch(self, index, reason=None):
+        old = self._tokens[self._index]
+        self._index = index
+        target = self._tokens[index]
+        if self._client is not None:
+            try:
+                self._client.authenticate(target.identifier, target.key)
+            except Exception as err:
+                log.error('切换令牌后重新认证失败：%s', err)
+        message = f'{reason} → ' if reason else ''
+        message += f'已切换到令牌 {target.identifier[:8]}…（原 {old.identifier[:8]}…）'
+        log.info(message)
+        bus.event('system', message)
+        return target
+
+    def _warn_no_candidate(self, reason):
+        now = time.time()
+        if now - self._last_no_candidate_warn > 1800:
+            self._last_no_candidate_warn = now
+            log.warning('令牌池内没有其他可用令牌：%s', reason)
+            bus.event('error', f'令牌池没有可用备用令牌：{reason}')
+
+    def _select_next_token(self, reason=None):
+        """轮询模式：切换到环形顺序里的下一个可用令牌。"""
         if len(self._tokens) <= 1:
             return
-
-        now = time.time()
-        # 排除已耗尽(380次或429)的令牌
-        avail_indices = [idx for idx, t in enumerate(self._tokens) if not t.exhausted()]
-        if not avail_indices:
+        candidates = self._preferred()
+        if not candidates:
+            self._warn_no_candidate(reason or '当前令牌已冻结，池中没有可用令牌')
             return
+        for step in range(1, len(self._tokens) + 1):
+            index = (self._index + step) % len(self._tokens)
+            if self._tokens[index] in candidates:
+                if index != self._index:
+                    self._switch(index, reason)
+                return
 
-        if self.rotation == 'round_robin':
-            # 找到下一个可用索引
-            for step in range(1, len(self._tokens) + 1):
-                next_idx = (self._index + step) % len(self._tokens)
-                if next_idx in avail_indices:
-                    if next_idx != self._index:
-                        self._index = next_idx
-                        if self._client is not None:
-                            try:
-                                t = self._tokens[self._index]
-                                self._client.authenticate(t.identifier, t.key)
-                            except Exception as err:
-                                log.error('轮询切换令牌认证失败：%s', err)
-                    break
+    def _rotate(self, reason):
+        """主备 / 冻结场景：切换到池中当日用量最少的可用令牌。"""
+        candidates = [t for t in self._preferred() if t is not self._tokens[self._index]]
+        if not candidates:
+            self._warn_no_candidate(reason)
+            return
+        target = min(candidates, key=lambda t: t.used)
+        self._switch(self._tokens.index(target), reason)
+
+    # ---------- 请求计数 ----------
 
     def on_request(self):
-        """每次 REST 请求调用：计数并在达到阈值或轮询模式下切换。"""
+        """每次 REST 请求调用：累加当日用量，达到阈值就让位，达到硬上限则冻结到次日 0 点。"""
         with self._lock:
+            for t in self._tokens:
+                t.rollover_if_new_day()
+
             token = self._tokens[self._index]
-            token.check_daily_reset()
             token.used += 1
             token.last_updated = time.time()
 
-            # 达到或超过 380 次（limit - threshold）自动标记耗尽 24 小时
-            if token.used >= (self.limit - self.threshold):
-                if token.exhausted_until <= time.time():
-                    token.exhausted_until = time.time() + EXHAUSTED_HOURS * 3600
-                    log.warning('令牌 %s… 用量已达 %d/%d，触发安全保护禁用 24 小时',
-                                token.identifier[:8], token.used, self.limit)
+            if token.used >= self.limit:
+                token.freeze(max(0.0, _next_reset_ts() - time.time()), 'quota')
+                token.last_error = f'今日用量已达上限 {self.limit} 次'
+                self._save_state()
+                self._rotate(f'令牌 {token.identifier[:8]}… 今日用量 {token.used}/{self.limit} 已封顶，冻结到次日 0 点')
+                return
 
             self._save_state()
 
-            # 当前令牌已达上限，强制熔断切换
-            if token.used >= (self.limit - self.threshold):
-                self._rotate(f'令牌 {token.identifier[:8]}… 用量已达 {token.used}/{self.limit}（已达安全阈值 {self.limit - self.threshold}）')
-            elif self.rotation == 'round_robin':
-                # 轮询模式：请求完成后顺延至下一个令牌，准备下一次请求
+            if self.rotation == 'round_robin':
                 self._select_next_token()
+            elif token.used >= self.rotate_at:
+                self._rotate(f'令牌 {token.identifier[:8]}… 今日用量 {token.used} 次已达让位阈值 {self.rotate_at}')
 
     def on_rate_limited(self, retry_after=None):
-        """收到 429：根据响应头或阶梯退避标记冻结时间，并自动切换备用令牌。"""
+        """收到 429：按服务端 Retry-After（缺省 5 分钟）冷却当前令牌并切换。"""
         with self._lock:
             token = self._tokens[self._index]
-            # 如果服务端给出了具体的重试秒数（如 60 秒），使用服务端秒数；否则短时冷却 5 分钟（300s）而不是粗暴禁用 24 小时
-            freeze_sec = int(retry_after) if retry_after else 300
-            token.exhausted_until = time.time() + freeze_sec
+            cooldown = int(retry_after) if retry_after else RATE_LIMIT_COOLDOWN
+            cooldown = max(30, min(cooldown, int(max(0.0, _next_reset_ts() - time.time()))))
+            token.freeze(cooldown, 'rate_limit')
             token.last_updated = time.time()
-            token.last_error = f'临时限流 429（{freeze_sec}秒后解除）'
+            token.last_error = f'触发 Crisp 限流(429)，{cooldown} 秒后重试'
             self._save_state()
-            self._rotate(f'令牌 {token.identifier[:8]}… 触发临时限流(429)，{freeze_sec} 秒后自动恢复')
+            self._rotate(f'令牌 {token.identifier[:8]}… 触发限流(429)，{cooldown} 秒后自动恢复')
+
+    def on_token_error(self, reason, cooldown=ERROR_COOLDOWN):
+        """令牌本身不可用（鉴权失败 / 接口异常）：短暂退避后重试，不影响当日计数语义。"""
+        with self._lock:
+            token = self._tokens[self._index]
+            token.freeze(cooldown, 'error')
+            token.last_updated = time.time()
+            token.last_error = str(reason)
+            self._save_state()
+            self._rotate(f'令牌 {token.identifier[:8]}… {reason}，{max(1, cooldown // 60)} 分钟后重试')
 
     def unfreeze_token(self, identifier):
-        """手动解除某个令牌的冻结/耗尽状态并重置错误。"""
+        """手动解除某个令牌的冻结状态。"""
         with self._lock:
             for t in self._tokens:
                 if t.identifier == identifier or t.identifier.startswith(identifier):
-                    t.exhausted_until = 0.0
+                    t.frozen_until = 0.0
+                    t.freeze_reason = None
                     t.last_error = None
                     self._save_state()
                     log.info('已手动解除令牌 %s… 的冻结状态', t.identifier[:8])
@@ -205,12 +308,14 @@ class TokenPool:
             return False
 
     def reset_token_usage(self, identifier):
-        """手动重置某个令牌的本地用量计数为 0。"""
+        """手动把某个令牌的当日用量清零并解除冻结。"""
         with self._lock:
             for t in self._tokens:
                 if t.identifier == identifier or t.identifier.startswith(identifier):
                     t.used = 0
-                    t.exhausted_until = 0.0
+                    t.day = _day_key()
+                    t.frozen_until = 0.0
+                    t.freeze_reason = None
                     t.last_error = None
                     t.last_updated = time.time()
                     self._save_state()
@@ -224,57 +329,45 @@ class TokenPool:
             token = self._tokens[self._index]
             if limit:
                 self.limit = int(limit)
+                self.rotate_at = min(self.rotate_at, self.limit)
             if used is not None:
                 token.used = max(token.used, int(used))
             token.last_updated = time.time()
             if reset_seconds:
-                token.exhausted_until = max(token.exhausted_until, time.time() + int(reset_seconds))
-            if token.used >= self.limit - self.threshold:
-                token.exhausted_until = max(token.exhausted_until,
-                                             time.time() + EXHAUSTED_HOURS * 3600)
+                token.freeze(min(int(reset_seconds), max(0.0, _next_reset_ts() - time.time())),
+                             'rate_limit')
+            if token.used >= self.limit:
+                token.freeze(max(0.0, _next_reset_ts() - time.time()), 'quota')
             self._save_state()
-            if token.used >= self.limit - self.threshold:
-                self._rotate(f'令牌 {token.identifier[:8]}… 服务端用量 {token.used}/{self.limit}')
-
-    def _rotate(self, reason):
-        now = time.time()
-        candidates = [t for t in self._tokens
-                      if t is not self._tokens[self._index] and not t.exhausted()]
-        if not candidates:
-            # 告警去抖：半小时最多提示一次，避免每次请求刷日志
-            if now - self._last_no_candidate_warn > 1800:
-                self._last_no_candidate_warn = now
-                log.warning('令牌池内没有其他可用令牌：%s', reason)
-                bus.event('error', f'令牌池没有可用备用令牌：{reason}')
-            return
-        target = min(candidates, key=lambda t: t.used)
-        old = self._tokens[self._index]
-        self._index = self._tokens.index(target)
-        if self._client is not None:
-            try:
-                self._client.authenticate(target.identifier, target.key)
-            except Exception as err:
-                log.error('切换令牌后重新认证失败：%s', err)
-        message = f'{reason} → 已切换到令牌 {target.identifier[:8]}…'
-        log.info(message)
-        bus.event('system', message)
+            if token.used >= self.rotate_at:
+                self._rotate(f'令牌 {token.identifier[:8]}… 服务端计数 {token.used}/{self.limit}')
 
     def snapshot(self):
         with self._lock:
+            # 注意用列表推导：any() 会短路，导致后面的令牌漏做跨天重置
+            rolled = [t.rollover_if_new_day() for t in self._tokens]
+            if any(rolled):
+                # 跨天重置每天只发生一次，顺手落盘；不要在此处频繁写文件
+                self._save_state()
             now = time.time()
-            for t in self._tokens:
-                t.check_daily_reset()
+            reset_at = _next_reset_ts(now)
             return {
                 'limit': self.limit,
-                'threshold': self.threshold,
+                'rotate_at': self.rotate_at,
                 'rotation': self.rotation,
                 'current': self._index,
+                'reset_at': reset_at,
+                'reset_in': max(0, int(reset_at - now)),
                 'tokens': [{
                     'identifier': t.identifier,
                     'used': min(t.used, self.limit),
                     'remaining': max(0, self.limit - t.used),
-                    'exhausted': t.exhausted(),
+                    'frozen': t.is_frozen(),
+                    'freeze_reason': t.freeze_reason if t.is_frozen() else None,
+                    'frozen_seconds': max(0, int(t.frozen_until - now)),
+                    'rotated': t.used >= self.rotate_at,
                     'last_error': t.last_error,
+                    'exhausted': t.is_frozen(),  # 兼容旧字段名
                 } for t in self._tokens],
             }
 

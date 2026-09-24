@@ -222,7 +222,7 @@ async function refreshStatus() {
 
   // 令牌用量
   if (engine.tokens) {
-    renderTokenUsage(engine.tokens.tokens, engine.tokens.current, engine.tokens.limit);
+    renderTokenUsage(engine.tokens.tokens, engine.tokens.current, engine.tokens.limit, engine.tokens);
   }
 }
 
@@ -324,29 +324,54 @@ function collectTokenPool() {
   });
 }
 
-function renderTokenUsage(tokens, current, limit) {
+function renderTokenUsage(tokens, current, limit, meta) {
   const wrap = $('#token-usage');
   if (!tokens || tokens.length === 0) {
     wrap.textContent = '未配置令牌池（使用上方 Crisp ID/Key 单令牌）';
     return;
   }
+  const rotateAt = (meta && meta.rotate_at) || 300;
+  const resetIn = meta && typeof meta.reset_in === 'number' ? meta.reset_in : null;
   wrap.innerHTML = '';
+
+  if (resetIn !== null) {
+    const tip = document.createElement('div');
+    tip.className = 'tu-tip';
+    tip.textContent = `每日 0 点重置用量（距下次重置 ${formatDuration(resetIn)}）· 单枚满 ${rotateAt} 次自动换令牌`;
+    wrap.appendChild(tip);
+  }
+
   tokens.forEach((t, i) => {
-    const pct = Math.min(100, Math.round((t.used / (limit || 400)) * 100));
+    const usedPct = Math.min(100, Math.round((t.used / (limit || 400)) * 100));
+    const rotatePct = Math.min(100, Math.round((rotateAt / (limit || 400)) * 100));
     const row = document.createElement('div');
     row.className = 'token-usage-row';
     const head = document.createElement('div');
     head.className = 'tu-head';
     const name = document.createElement('span');
     name.textContent = t.identifier.slice(0, 8) + '…';
+
     const badge = document.createElement('span');
     if (i === current) {
       badge.className = 'token-badge current';
       badge.textContent = '使用中';
-    } else if (t.exhausted) {
+    } else if (t.frozen && t.freeze_reason === 'quota') {
       badge.className = 'token-badge exhausted';
-      badge.textContent = '已冻结/耗尽';
+      badge.textContent = '今日封顶';
+    } else if (t.frozen && t.freeze_reason === 'rate_limit') {
+      badge.className = 'token-badge cooldown';
+      badge.textContent = `限流冷却 ${formatDuration(t.frozen_seconds)}`;
+    } else if (t.frozen) {
+      badge.className = 'token-badge cooldown';
+      badge.textContent = `退避重试 ${formatDuration(t.frozen_seconds)}`;
+    } else if (t.used >= rotateAt) {
+      badge.className = 'token-badge rotated';
+      badge.textContent = '已让位';
     }
+    if (t.last_error && (t.frozen || i === current)) {
+      badge.title = t.last_error;
+    }
+
     const used = document.createElement('span');
     used.className = 'used';
     used.textContent = `${t.used} / ${limit}（剩余 ${t.remaining}）`;
@@ -355,7 +380,7 @@ function renderTokenUsage(tokens, current, limit) {
     resetBtn.type = 'button';
     resetBtn.className = 'tu-reset-btn';
     resetBtn.textContent = '重置';
-    resetBtn.title = '重置此令牌计数与冻结状态';
+    resetBtn.title = '立即清零此令牌用量并解除冻结';
     resetBtn.addEventListener('click', async () => {
       try {
         const { ok, data } = await api(`/api/tokens/${t.identifier}/reset`, { method: 'POST' });
@@ -374,12 +399,28 @@ function renderTokenUsage(tokens, current, limit) {
     const bar = document.createElement('div');
     bar.className = 'usage-bar';
     const fill = document.createElement('div');
-    fill.className = 'fill' + (pct >= 96 ? ' full' : (pct >= 70 ? ' warn' : ''));
-    fill.style.width = pct + '%';
+    fill.className = 'fill' + (usedPct >= 100 ? ' full' : (usedPct >= rotatePct ? ' warn' : ''));
+    fill.style.width = usedPct + '%';
     bar.appendChild(fill);
+    if (rotatePct > 0 && rotatePct < 100) {
+      const marker = document.createElement('div');
+      marker.className = 'usage-marker';
+      marker.style.left = rotatePct + '%';
+      marker.title = `满 ${rotateAt} 次换令牌`;
+      bar.appendChild(marker);
+    }
     row.append(head, bar);
     wrap.appendChild(row);
   });
+}
+
+function formatDuration(seconds) {
+  const sec = Math.max(0, Math.round(seconds || 0));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (h > 0) return `${h} 小时 ${m} 分`;
+  if (m > 0) return `${m} 分 ${sec % 60} 秒`;
+  return `${sec} 秒`;
 }
 
 
