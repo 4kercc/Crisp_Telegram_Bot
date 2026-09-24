@@ -303,20 +303,41 @@ class BotEngine:
 
     async def _on_tg_error(self, update, context):
         err = context.error
-        if err is not None:
-            err_msg = str(err)
-            if 'Conflict' in err_msg:
-                log.error('Telegram 报告连接冲突 (Conflict)：可能存在活跃 Webhook 或多个相同 Token 的 Bot 实例在同时运行！')
-                bus.event('error', 'Telegram 连接冲突：检测到活跃 Webhook 或多个 Bot 实例同时运行')
-                # 尝试再次强制清理 Webhook
-                try:
-                    if self._app and self._app.bot:
-                        await self._app.bot.delete_webhook(drop_pending_updates=True)
-                except Exception:
-                    pass
-            else:
-                log.error('Telegram 异常：%s', err)
-                bus.event('error', f'Telegram 异常：{err_msg}')
+        if err is None:
+            return
+        err_msg = str(err)
+        if 'Conflict' in err_msg:
+            log.error('Telegram 报告连接冲突 (Conflict)：可能存在活跃 Webhook 或多个相同 Token 的 Bot 实例在同时运行！')
+            bus.event('error', 'Telegram 连接冲突：检测到活跃 Webhook 或多个 Bot 实例同时运行')
+            # 尝试再次强制清理 Webhook
+            try:
+                if self._app and self._app.bot:
+                    await self._app.bot.delete_webhook(drop_pending_updates=True)
+            except Exception:
+                pass
+        elif self._is_network_error(err):
+            # 网络抖动属于可自愈情况，SDK 会自行重试，不当作业务错误上报
+            log.warning('Telegram 网络抖动（%s），本次请求已跳过，SDK 会自动重试', type(err).__name__)
+        else:
+            log.error('Telegram 异常：%s', err)
+            bus.event('error', f'Telegram 异常：{err_msg}')
+
+    @staticmethod
+    def _is_network_error(err):
+        """判断异常链中是否包含网络类错误（连接重置、超时、读写失败等）。"""
+        network_names = {
+            'NetworkError', 'TimedOut', 'ConnectError', 'ReadError', 'WriteError',
+            'ReadTimeout', 'ConnectTimeout', 'ConnectionResetError', 'BrokenResourceError',
+            'ServerDisconnectedError', 'ClientConnectorError', 'OSError',
+        }
+        node = err
+        seen = set()
+        while node is not None and id(node) not in seen:
+            seen.add(id(node))
+            if type(node).__name__ in network_names:
+                return True
+            node = node.__cause__ or node.__context__
+        return False
 
     # ---------- Telegram 回复 / 话题消息 → Crisp ----------
 

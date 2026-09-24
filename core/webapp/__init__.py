@@ -37,6 +37,11 @@ def create_app():
     def index():
         return send_from_directory(app.static_folder, 'index.html')
 
+    @app.get('/favicon.ico')
+    def favicon():
+        # 没有图标文件时返回空响应，避免浏览器反复请求产生 404 日志噪音
+        return '', 204
+
     @app.errorhandler(Exception)
     def on_error(err):
         if isinstance(err, HTTPException):
