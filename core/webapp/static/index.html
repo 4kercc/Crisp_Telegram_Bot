@@ -140,6 +140,13 @@
               <span class="field-hint">无论哪种模式，单枚令牌达到 380 次时均会自动冻结保护 24 小时并跳过</span>
             </div>
             <div class="field">
+              <span class="field-label">会话标题清洗</span>
+              <div class="radio-row">
+                <label class="checkbox"><input type="checkbox" id="cfg-clean-nickname" checked> 自动清理访客昵称（去掉邮箱与 VIP 等级，Crisp 会话标签只显示用户名）</label>
+              </div>
+              <span class="field-hint">面板主题常把「用户名 VIP4 邮箱」整串写进昵称，开启后机器人会在访客首次发消息时把昵称清洗回用户名</span>
+            </div>
+            <div class="field">
               <span class="field-label">消息接收模式</span>
               <div class="radio-row">
                 <label><input type="radio" name="cfg-msgapi" value="rtm" checked> RTM（WebSocket 实时推送，推荐）</label>

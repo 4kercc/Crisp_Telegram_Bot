@@ -10,7 +10,7 @@ import socketio
 from core import session_map, tg_compat
 from core.logbus import bus
 from core.runtime import runtime
-from core.templates import (build_push_text, build_topic_name,
+from core.templates import (build_push_text, build_topic_name, clean_nickname,
                             is_welcome_enabled, match_autoreply,
                             render_welcome_message)
 
@@ -138,8 +138,26 @@ class CrispRtmBridge:
 
     def storeCrispConversationMetas(self, session_id):
         metas = self.client.website.get_conversation_metas(self.website_id, session_id)
+        self._clean_nickname(session_id, metas)
         self.conversationMetasDict[session_id] = metas
         session_map.record_email(session_id, metas.get('email'))
+
+    def _clean_nickname(self, session_id, metas):
+        """面板主题常把「用户名 VIP等级 邮箱」整串塞进昵称，Crisp 会话标签就特别长；
+        这里清洗后回写 Crisp，让会话标题只显示用户名。"""
+        if not (self.config.get('crisp') or {}).get('clean_nickname', True):
+            return
+        raw = str(metas.get('nickname') or '').strip()
+        clean = clean_nickname(raw)
+        if not clean or clean == raw:
+            return
+        try:
+            self.client.website.update_conversation_metas(
+                self.website_id, session_id, {'nickname': clean})
+            metas['nickname'] = clean
+            log.info('已把会话 %s 的昵称「%s」清洗为「%s」', session_id, raw, clean)
+        except Exception as err:
+            log.warning('清洗会话 %s 昵称失败：%s', session_id, err)
 
     def getCrispConnectEndpoints(self):
         url = 'https://api.crisp.chat/v1/plugin/connect/endpoints'

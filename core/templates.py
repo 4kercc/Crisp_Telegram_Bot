@@ -8,6 +8,31 @@ def escape(value):
     return html.escape(str(value)) if value is not None else ''
 
 
+# ---------- 访客昵称清洗：Crisp 会话标题只保留用户名 ----------
+
+EMAIL_RE = re.compile(r'[A-Za-z0-9._+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+')
+# 用自定义边界而不是 \b：下划线/中文与字母之间 \b 不生效（如 小白_VIP4）
+VIP_TOKEN_RE = re.compile(r'(?i)(?<![A-Za-z])VIP\s*(?:等级|级别|level)?\s*[:：=]?\s*\d{1,3}(?![0-9A-Za-z])')
+SEPARATOR_TRIM_RE = re.compile(r'^[\s\-_｜|/·,，、:：]+|[\s\-_｜|/·,，、:：]+$')
+SPACES_RE = re.compile(r'\s{2,}')
+
+
+def clean_nickname(raw):
+    """把「小白 VIP4 838009319@qq.com」这类面板推送的昵称清洗成「小白」。
+
+    规则：去掉邮箱、去掉 VIP 等级片段（VIP4 / VIP 等级4 / vip:4 等），
+    再清理残留的分隔符与多余空格；清洗结果为空时返回原值兜底。
+    """
+    text = str(raw or '').strip()
+    if not text:
+        return text
+    cleaned = EMAIL_RE.sub(' ', text)
+    cleaned = VIP_TOKEN_RE.sub(' ', cleaned)
+    cleaned = SPACES_RE.sub(' ', cleaned)
+    cleaned = SEPARATOR_TRIM_RE.sub('', cleaned).strip()
+    return cleaned or text
+
+
 def format_timestamp(timestamp):
     """Crisp 消息时间戳（秒，兼容毫秒）→ 本地时间字符串，无效时返回 None。"""
     try:

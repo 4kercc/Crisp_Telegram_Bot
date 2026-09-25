@@ -4,11 +4,28 @@ import logging
 from core import session_map, tg_compat
 from core.logbus import bus
 from core.runtime import runtime
-from core.templates import (build_push_text, build_topic_name,
+from core.templates import (build_push_text, build_topic_name, clean_nickname,
                             is_welcome_enabled, match_autoreply,
                             render_welcome_message)
 
 log = logging.getLogger('mod.getUnread')
+
+
+def _clean_nickname(client, config, website_id, session_id, metas):
+    """面板主题常把「用户名 VIP等级 邮箱」整串塞进昵称，Crisp 会话标签就特别长；
+    这里清洗后回写 Crisp，让会话标题只显示用户名。"""
+    if not (config.get('crisp') or {}).get('clean_nickname', True):
+        return
+    raw = str(metas.get('nickname') or '').strip()
+    clean = clean_nickname(raw)
+    if not clean or clean == raw:
+        return
+    try:
+        client.website.update_conversation_metas(website_id, session_id, {'nickname': clean})
+        metas['nickname'] = clean
+        log.info('已把会话 %s 的昵称「%s」清洗为「%s」', session_id, raw, clean)
+    except Exception as err:
+        log.warning('清洗会话 %s 昵称失败：%s', session_id, err)
 
 
 class Conf:
@@ -43,6 +60,7 @@ async def exec(context):
         session_id = conversation['session_id']
         messages = client.website.get_messages_in_conversation(website_id, session_id, {})
         metas = client.website.get_conversation_metas(website_id, session_id)
+        _clean_nickname(client, config, website_id, session_id, metas)
         session_map.record_email(session_id, metas.get('email'))
 
         unread_msgs = [m for m in messages if len(m.get('read', [])) == 0]
