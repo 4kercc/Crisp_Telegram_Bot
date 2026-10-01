@@ -103,6 +103,7 @@ async def _push_batch(context, client, config, website_id, session_id, metas, me
                 text_contents.append('[图片]')
 
     # 检查自动回复与欢迎语匹配
+    real_texts = [c for c in text_contents if c != '[图片]']
     welcome_cfg = config.get('welcome') or {}
     ttl_hours = welcome_cfg.get('ttl_hours', 24)
     welcome_active = is_welcome_enabled(welcome_cfg) and session_map.is_welcome_needed(session_id, ttl_hours)
@@ -120,8 +121,8 @@ async def _push_batch(context, client, config, website_id, session_id, metas, me
         reply_to_send = render_welcome_message(welcome_cfg, metas=metas)
         session_map.mark_welcomed(session_id)
 
-    # 构造卡片文本
-    text = build_push_text(metas, text_contents if len(text_contents) > 1 else (text_contents[0] if text_contents else ''),
+    # 构造卡片文本（图片占位符不进正文，图片单独逐张推送）
+    text = build_push_text(metas, real_texts,
                            autoreply=reply_to_send,
                            timestamp=latest_ts or None)
 
@@ -160,21 +161,12 @@ async def _push_batch(context, client, config, website_id, session_id, metas, me
                     log.warning('为会话 %s 创建群话题失败：%s，降级为普通群消息', session_id, err)
                     thread_id = None
 
-        sent_msg_id = None
+        sent_ids = []
         try:
-            if image_urls and len(text_contents) == len(image_urls):
-                caption = build_push_text(metas, '', image_only=True, timestamp=latest_ts or None)
-                sent_msg_id = await tg_compat.send_photo(
-                    token=token,
-                    chat_id=admin_id,
-                    photo_url=image_urls[0],
-                    caption=caption,
-                    parse_mode='HTML',
-                    message_thread_id=thread_id,
-                    proxy=proxy,
-                )
-            else:
-                sent_msg_id = await tg_compat.send_message(
+            has_text = bool(real_texts)
+            # 先发文字卡片；图片随后逐张补发（旧逻辑图文混发时整张图片会被丢弃）
+            if has_text:
+                card_id = await tg_compat.send_message(
                     token=token,
                     chat_id=admin_id,
                     text=text,
@@ -182,12 +174,31 @@ async def _push_batch(context, client, config, website_id, session_id, metas, me
                     message_thread_id=thread_id,
                     proxy=proxy,
                 )
+                if card_id:
+                    sent_ids.append(card_id)
+
+            for img_idx, url in enumerate(image_urls):
+                # 纯图片批次：首张图片附带用户资料说明；图文混发时后续图片不带说明
+                caption = ''
+                if not has_text and img_idx == 0:
+                    caption = build_push_text(metas, '', image_only=True, timestamp=latest_ts or None)
+                photo_id = await tg_compat.send_photo(
+                    token=token,
+                    chat_id=admin_id,
+                    photo_url=url,
+                    caption=caption,
+                    parse_mode='HTML',
+                    message_thread_id=thread_id,
+                    proxy=proxy,
+                )
+                if photo_id:
+                    sent_ids.append(photo_id)
         except Exception as send_err:
             log.error('推送 Telegram 失败（目标 %s）：%s', admin_id, send_err)
             bus.event('error', f'推送 Telegram 失败：{send_err}', session_id=session_id)
 
-        if sent_msg_id:
-            session_map.record(admin_id, sent_msg_id, session_id)
+        for mid in sent_ids:
+            session_map.record(admin_id, mid, session_id)
         if thread_id is not None:
             session_map.record_topic(admin_id, session_id, thread_id)
 
@@ -199,7 +210,9 @@ async def _push_batch(context, client, config, website_id, session_id, metas, me
             'fingerprints': fingerprints,
         })
 
-    log.info('已推送聚合文本消息到 Telegram（会话 %s，共 %d 条）', session_id, len(messages))
-    bus.event('message_in', ' | '.join(text_contents) if text_contents else '[多媒体消息]',
-              session_id=session_id, msg_type='batch' if len(messages) > 1 else 'text',
+    log.info('已推送到 Telegram（会话 %s，文字 %d 条 + 图片 %d 张）',
+             session_id, len(real_texts), len(image_urls))
+    bus.event('message_in', ' | '.join(text_contents) if text_contents else '[图片]',
+              session_id=session_id,
+              msg_type='image' if image_urls and not real_texts else ('batch' if len(messages) > 1 else 'text'),
               status='ok', email=metas.get('email'))

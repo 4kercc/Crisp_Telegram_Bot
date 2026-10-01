@@ -77,28 +77,72 @@ async def send_message(token, chat_id, text, parse_mode='HTML', message_thread_i
     raise RuntimeError(data.get('description') or '发送失败')
 
 
+def _download_image(url, proxy=''):
+    """把 Crisp 图片下载到本地（供 Telegram URL 拉取失败后改为文件上传）。"""
+    try:
+        resp = requests.get(url, timeout=20, proxies=_proxies(proxy))
+        if resp.ok and resp.content:
+            ctype = resp.headers.get('Content-Type') or 'image/jpeg'
+            return resp.content, ctype.split(';')[0].strip()
+    except Exception as err:
+        log.warning('下载 Crisp 图片失败：%s', err)
+    return None, None
+
+
+def tg_api_post_multipart(token, method, fields, file_field, filename, content, ctype, proxy=''):
+    """以 multipart/form-data 调用 Telegram Bot API（用于上传图片二进制）。"""
+    url = f'https://api.telegram.org/bot{token}/{method}'
+    try:
+        resp = requests.post(url, data=fields,
+                             files={file_field: (filename, content, ctype)},
+                             timeout=60, proxies=_proxies(proxy))
+        data = resp.json()
+        if not data.get('ok'):
+            log.warning('Telegram API %s 上传返回错误：%s', method, data.get('description'))
+        return data
+    except Exception as err:
+        log.error('Telegram API %s 上传异常：%s', method, err)
+        return {'ok': False, 'description': str(err)}
+
+
 async def send_photo(token, chat_id, photo_url, caption='', parse_mode='HTML', message_thread_id=None, proxy=''):
-    """发送图片消息，支持 message_thread_id。返回 message_id 或 None。"""
-    payload = {
-        'chat_id': chat_id,
-        'photo': photo_url,
-        'caption': caption,
-        'parse_mode': parse_mode,
-    }
-    if message_thread_id is not None:
-        payload['message_thread_id'] = int(message_thread_id)
+    """发送图片消息，支持 message_thread_id。返回 message_id 或 None。
+
+    优先让 Telegram 按 URL 拉取；若拉取失败（链接过期/无法访问），
+    自动把图片下载到本地后改为 multipart 文件上传重试。
+    """
+    def _payload(with_thread=True):
+        payload = {'chat_id': chat_id, 'photo': photo_url}
+        if caption:
+            payload['caption'] = caption
+            payload['parse_mode'] = parse_mode
+        if with_thread and message_thread_id is not None:
+            payload['message_thread_id'] = int(message_thread_id)
+        return payload
 
     loop = asyncio.get_running_loop()
-    data = await loop.run_in_executor(None, tg_api_post, token, 'sendPhoto', payload, proxy)
+    data = await loop.run_in_executor(None, tg_api_post, token, 'sendPhoto', _payload(), proxy)
     if data.get('ok'):
         return (data.get('result') or {}).get('message_id')
 
+    # 话题发送失败时先降级为不带话题直发
     if message_thread_id is not None:
         log.warning('带话题 ID %s 发送图片失败：%s，尝试普通直发', message_thread_id, data.get('description'))
-        payload.pop('message_thread_id', None)
-        fallback_data = await loop.run_in_executor(None, tg_api_post, token, 'sendPhoto', payload, proxy)
-        if fallback_data.get('ok'):
-            return (fallback_data.get('result') or {}).get('message_id')
-        raise RuntimeError(fallback_data.get('description') or '普通图片发送失败')
+        data = await loop.run_in_executor(None, tg_api_post, token, 'sendPhoto', _payload(False), proxy)
+        if data.get('ok'):
+            return (data.get('result') or {}).get('message_id')
+
+    # Telegram 拉取不到图片 URL 时：下载后以文件上传重试
+    if photo_url.startswith('http'):
+        log.warning('Telegram 拉取图片 URL 失败（%s），尝试下载后直接上传：%s',
+                    data.get('description'), photo_url)
+        content, ctype = await loop.run_in_executor(None, _download_image, photo_url, proxy)
+        if content:
+            fields = {k: v for k, v in _payload(False).items() if k != 'photo'}
+            data = await loop.run_in_executor(
+                None, tg_api_post_multipart,
+                token, 'sendPhoto', fields, 'photo', 'image', content, ctype, proxy)
+            if data.get('ok'):
+                return (data.get('result') or {}).get('message_id')
 
     raise RuntimeError(data.get('description') or '发送图片失败')
